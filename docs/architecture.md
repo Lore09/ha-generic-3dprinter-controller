@@ -30,8 +30,8 @@ config entry ──> PrinterConfig ──> adapter (one per protocol)
 
 The fleet splits in a way that has to be modelled, not branched around.
 
-**API printers** speak something we can drive: SDCP, Moonraker, OctoPrint,
-PrusaLink. They give a real snapshot, and their commands map onto the normalised
+**API printers** speak something we can drive: SDCP, MQTT, Moonraker, OctoPrint,
+Duet. They give a real snapshot, and their commands map onto the normalised
 command vocabulary. They may or may not also have a web UI, and may or may not
 have a camera.
 
@@ -50,7 +50,7 @@ snapshot (`snapshot_available = False`), not a type check.
 `PrinterSnapshot` is the sole currency between adapters and everything else. It
 is frozen, and every field that a protocol might not be able to express is
 optional with `None` meaning "this printer has no such reading". That is not
-hedging: it is the measured truth. OctoPrint and PrusaLink report no layer count
+hedging: it is the measured truth. OctoPrint reports no layer count
 at all, and Duet computes progress instead of reporting it.
 
 Consequences that follow, and that the card must respect:
@@ -138,7 +138,7 @@ never share mutable state and never need serialising against each other.
   out of scope, and Bambu's firmware-side developer-mode gate is reported as a
   state rather than retried.
 * No protocol is claimed to work that was not probed. The Centauri Carbon was
-  probed live. Moonraker, OctoPrint and PrusaLink are built from the documented
+  probed live. Moonraker, OctoPrint and Duet are built from the documented
   and cited API surface, and their adapters say so.
 * No generic "unknown printer" auto-detection beyond a port probe that tells the
   user what it found and asks them to confirm. Guessing a protocol and then

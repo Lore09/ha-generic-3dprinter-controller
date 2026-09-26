@@ -14,7 +14,7 @@ Three probes are used together:
   which a Centauri Carbon 2 answers with its serial number, its model, and whether
   it is in LAN-only mode;
 * a TCP connect plus a small HTTP fingerprint, which identifies Moonraker,
-  OctoPrint and PrusaLink from their own headers and endpoints.
+  OctoPrint and Duet from their own headers and endpoints.
 """
 
 from __future__ import annotations
@@ -54,8 +54,6 @@ CANDIDATE_PORTS: Final[tuple[tuple[int, ProtocolId], ...]] = (
 #: HTTP fingerprints, checked against the first response body and headers.
 HTTP_FINGERPRINTS: Final[tuple[tuple[str, ProtocolId], ...]] = (
     ("octoprint", ProtocolId.OCTOPRINT),
-    ("prusalink", ProtocolId.PRUSALINK),
-    ("prusa", ProtocolId.PRUSALINK),
     ("moonraker", ProtocolId.MOONRAKER),
     ("klipper", ProtocolId.MOONRAKER),
     ("duet", ProtocolId.DUET),

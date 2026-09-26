@@ -184,7 +184,6 @@ class ProtocolId(StrEnum):
     ELEGOO_CC2 = "elegoo_cc2"
     MOONRAKER = "moonraker"
     OCTOPRINT = "octoprint"
-    PRUSALINK = "prusalink"
     DUET = "duet"
     WEB_ONLY = "web_only"
 

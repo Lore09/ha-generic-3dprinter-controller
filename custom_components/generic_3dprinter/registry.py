@@ -31,7 +31,6 @@ ADAPTER_MODULES: Final[tuple[str, ...]] = (
     "elegoo_cc2",
     "moonraker",
     "octoprint",
-    "prusalink",
     "duet",
     "web_only",
 )
@@ -322,32 +321,6 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "across installations, so the config flow probes it"
                 ),
                 "verified": "no layer count is exposed by the REST API, so it stays None",
-            },
-        ),
-        ProtocolId.PRUSALINK: AdapterRegistration(
-            id=ProtocolId.PRUSALINK,
-            label="PrusaLink",
-            adapter=_resolve(_ADAPTER_MODULES["prusalink"], "PrusaLinkProtocol"),  # type: ignore[arg-type]
-            capabilities=frozenset(
-                {
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.STOP,
-                    Capability.FILE_LIST,
-                    Capability.FILE_UPLOAD,
-                    Capability.WEB_UI,
-                }
-            ),
-            fields=("port", "web_url"),
-            credentials=("username", "password", "api_key"),
-            ports=(80, 443),
-            evidence={
-                "inferred": (
-                    "PrusaLink has no start-print and no set-temperature operation at all, "
-                    "which is why START_PRINT and the temperature capabilities are absent "
-                    "here rather than faked; state and job fields come from the PrusaLink "
-                    "OpenAPI description"
-                ),
             },
         ),
         ProtocolId.DUET: AdapterRegistration(
