@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -38,6 +38,9 @@ from .const import (
 )
 from .models import FileEntry, PrinterSnapshot
 from .validation import ParamError, validate_params
+
+if TYPE_CHECKING:
+    from .discovery import DiscoveryResult
 
 COMMAND_CAPABILITY: Final[Mapping[Command, Capability]] = MappingProxyType(
     {
@@ -447,6 +450,23 @@ class Protocol(ABC):
         its own; the card then asks for the material in words.
         """
         return ()
+
+    @classmethod
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Look for this protocol's printers on the local network.
+
+        Read-only: a probe may ask a printer who it is and nothing more. The
+        default finds nothing, for a protocol with no discovery of its own.
+        """
+        return []
+
+    @classmethod
+    async def async_identify(cls, host: str, timeout: float) -> DiscoveryResult | None:
+        """Ask ``host`` whether it is one of this protocol's printers.
+
+        Read-only, like :meth:`async_discover`. ``None`` means no, or no answer.
+        """
+        return None
 
     @classmethod
     async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:

@@ -17,7 +17,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.generic_3dprinter import discovery
 from custom_components.generic_3dprinter.adapters import elegoo_cc2 as cc2
 from custom_components.generic_3dprinter.const import (
     DATA_COORDINATORS,
@@ -41,7 +40,7 @@ def discovery_answering(lan_status: int):
 
     async def fake(host: str | None = None, timeout: float = 0):
         reply = {"id": 0, "result": {**LIVE_RESULT, "lan_status": lan_status}}
-        return discovery.parse_cc2_reply(reply, host or "192.0.2.10")
+        return cc2.parse_cc2_reply(reply, host or "192.0.2.10")
 
     return fake
 

@@ -56,6 +56,7 @@ from ..const import (
     UnsafeFeature,
 )
 from ..mjpeg import JPEG_EOI, JPEG_SOI, jpeg_frames  # noqa: F401 - re-exported
+from ..discovery import DiscoveryResult, async_probe_udp
 from ..models import (
     Axis,
     Celsius,
@@ -335,8 +336,54 @@ def _percent(value: Any) -> Percent | None:
     return Percent(min(max(number, 0.0), 100.0))
 
 
+# ------------------------------------------------------------------ discovery
+
+#: The SDCP discovery literal, broadcast to UDP port 3000. A Centauri Carbon
+#: answers with its mainboard id, address, model and firmware.
+SDCP_DISCOVERY_PORT: Final = 3000
+SDCP_DISCOVERY_PROBE: Final = b"M99999"
+
+
+async def async_discover_sdcp(timeout: float = 3.0) -> DiscoveryResult | None:
+    """Broadcast the Elegoo discovery probe and parse the first reply."""
+    answer = await async_probe_udp(
+        SDCP_DISCOVERY_PROBE, ("255.255.255.255", SDCP_DISCOVERY_PORT), timeout
+    )
+    if answer is None:
+        return None
+    reply, _sender = answer
+
+    data = reply.get("Data") if isinstance(reply.get("Data"), dict) else reply
+    if not isinstance(data, dict):
+        return None
+
+    mainboard = str(data.get("MainboardID") or "") or None
+    return DiscoveryResult(
+        host=str(data.get("MainboardIP") or "") or _reply_host(reply),
+        protocol=ProtocolId.SDCP_CC1,
+        candidates=[ProtocolId.SDCP_CC1],
+        mainboard_id=mainboard,
+        firmware=str(data.get("FirmwareVersion") or "") or None,
+        model=str(data.get("MachineName") or data.get("Name") or "") or None,
+        evidence=["answered the UDP discovery probe on port 3000"],
+    )
+
+
+def _reply_host(reply: dict[str, Any]) -> str:
+    data = reply.get("Data")
+    if isinstance(data, dict):
+        return str(data.get("MainboardIP") or "")
+    return ""
+
+
 class SdcpProtocol(Protocol):
     """SDCP over a WebSocket, with the MJPEG camera on its own HTTP port."""
+
+    @classmethod
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Broadcast the SDCP discovery literal, as the printer's own tools do."""
+        found = await async_discover_sdcp(timeout)
+        return [found] if found is not None else []
 
     def __init__(
         self,

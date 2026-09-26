@@ -55,7 +55,7 @@ from typing import Any, Final
 import aiohttp
 
 from ..const import Capability, Command, LightChannel, ModelProfile, PrintState, ProtocolId, UnsafeFeature
-from ..discovery import DiscoveryResult, async_discover_cc2
+from ..discovery import DiscoveryResult, async_probe_udp
 from ..models import (
     Axis,
     Celsius,
@@ -251,6 +251,77 @@ FAN_KEYS: Final[Mapping[str, str]] = MappingProxyType(
 #: The fans the printer can be told to set. The hotend and board fans are
 #: reported, and run under the firmware's own control.
 SETTABLE_FANS: Final = ("model", "auxiliary", "chamber")
+
+
+#: The discovery request Elegoo's slicer sends, and the port it goes to. The reply
+#: carries the serial number every topic is built from, and the network mode.
+CC2_DISCOVERY_PORT: Final = 52700
+CC2_DISCOVERY_PROBE: Final = b'{"id": 0, "method": 7000}'
+
+
+def _flag(value: Any) -> bool | None:
+    """Read a discovery flag the printer may send as an integer or a boolean."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return None
+
+
+def parse_cc2_reply(reply: dict[str, Any], sender: str) -> DiscoveryResult | None:
+    """Return what a Centauri Carbon 2 said about itself, or ``None`` for anything else.
+
+    The reply carries no address of its own, so the sender of the datagram is the
+    printer's address. Measured on a live printer::
+
+        {"id": 0, "result": {"host_name": "CC2 QAZJ", "lan_status": 0,
+         "machine_model": "Centauri Carbon 2", "protocol_version": "1.0.0",
+         "sn": "F01BXKSWL13QAZJ", "token_status": 0}}
+    """
+    result = reply.get("result")
+    if not isinstance(result, dict):
+        return None
+    serial = str(result.get("sn") or "").strip()
+    if not serial or not sender:
+        return None
+    lan_only = _flag(result.get("lan_status"))
+    access_code_set = _flag(result.get("token_status"))
+    evidence = [f"answered the UDP discovery probe on port {CC2_DISCOVERY_PORT}"]
+    if lan_only is False:
+        evidence.append("the printer is in cloud mode, not LAN-only mode")
+    return DiscoveryResult(
+        host=sender,
+        protocol=ProtocolId.ELEGOO_CC2,
+        candidates=[ProtocolId.ELEGOO_CC2],
+        mainboard_id=serial,
+        firmware=None,
+        model=str(result.get("machine_model") or "") or None,
+        evidence=evidence,
+        lan_only=lan_only,
+        access_code_set=access_code_set,
+        prefill={"serial": serial},
+    )
+
+
+def _is_cc2_reply(payload: dict[str, Any]) -> bool:
+    return isinstance(payload.get("result"), dict) and "sn" in payload["result"]
+
+
+async def async_discover_cc2(
+    host: str | None = None, timeout: float = DISCOVERY_TIMEOUT
+) -> DiscoveryResult | None:
+    """Ask for a Centauri Carbon 2, on one host or by broadcast.
+
+    This is the discovery request Elegoo's own slicer sends. It is answered even
+    while another client holds a session, and it is the only way to learn the
+    serial number every MQTT topic is built from.
+    """
+    target = (host or "255.255.255.255", CC2_DISCOVERY_PORT)
+    answer = await async_probe_udp(CC2_DISCOVERY_PROBE, target, timeout, _is_cc2_reply)
+    if answer is None:
+        return None
+    reply, sender = answer
+    return parse_cc2_reply(reply, sender)
 
 
 class _NoAnswerError(ProtocolError):
@@ -585,6 +656,17 @@ class ElegooCC2Protocol(Protocol):
         return self._topic(f"{self._client_id}_req/register_response")
 
     # ----------------------------------------------------------- config flow
+
+    @classmethod
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Broadcast the request Elegoo's slicer sends."""
+        found = await async_discover_cc2(timeout=timeout)
+        return [found] if found is not None else []
+
+    @classmethod
+    async def async_identify(cls, host: str, timeout: float) -> DiscoveryResult | None:
+        """Send the slicer's request to one host."""
+        return await async_discover_cc2(host, timeout=timeout)
 
     @classmethod
     async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:

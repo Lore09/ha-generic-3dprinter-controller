@@ -12,7 +12,6 @@ printer they own rather than a wire protocol they have never heard of.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -43,7 +42,7 @@ from .const import (
     MIN_SCAN_INTERVAL,
     ProtocolId,
 )
-from .discovery import async_discover_cc2, async_discover_host, async_discover_sdcp
+from .discovery import DiscoveryResult, async_discover_all, async_identify_host
 from .protocols import ConfigError, PrinterConfig, parse_config
 from .registry import (
     ADAPTERS,
@@ -60,6 +59,7 @@ STEP_USER = "user"
 STEP_PROTOCOL = "protocol"
 STEP_MODEL = "model"
 STEP_DETAILS = "details"
+STEP_PICK = "pick"
 STEP_UNSAFE = "unsafe"
 
 _CREDENTIAL_LABELS = {
@@ -80,6 +80,7 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
         self._data: dict[str, Any] = {}
         self._registration: AdapterRegistration | None = None
         self._family: str | None = None
+        self._found: list[DiscoveryResult] = []
 
     # ------------------------------------------------------------------ steps
 
@@ -103,32 +104,19 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_discover(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Probe for a printer and pre-fill the form with what answered."""
-        sdcp, cc2 = await asyncio.gather(async_discover_sdcp(), async_discover_cc2())
-        discovered = sdcp or cc2
-        found: dict[str, Any] = {"host": "", "protocol": ""}
-        evidence: list[str] = []
-        if discovered is not None:
-            found["host"] = discovered.host
-            found["protocol"] = discovered.protocol.value
-            evidence = discovered.evidence
-            if discovered.model:
-                found["name"] = discovered.model
-            if discovered is cc2 and cc2.mainboard_id:
-                found[CONF_SERIAL] = cc2.mainboard_id
-        else:
-            manual = self._data.get(CONF_HOST)
-            if manual:
-                probe = await async_discover_host(str(manual))
-                if probe is not None:
-                    found["host"] = probe.host
-                    found["protocol"] = probe.protocol.value
-                    found["name"] = probe.model or probe.protocol.value
-                    evidence = probe.evidence
-                    if probe.protocol is ProtocolId.ELEGOO_CC2 and probe.mainboard_id:
-                        found[CONF_SERIAL] = probe.mainboard_id
+        """Ask every protocol for its printers and offer the ones not set up yet."""
+        found = [
+            result
+            for result in await async_discover_all(ADAPTERS.values())
+            if not self._already_configured(result.protocol, result.host, result.prefill.get(CONF_SERIAL))
+        ]
+        manual = self._data.get(CONF_HOST)
+        if not found and manual:
+            probe = await async_identify_host(ADAPTERS.values(), str(manual))
+            if probe is not None:
+                found = [probe]
 
-        if not found["host"]:
+        if not found:
             return self.async_show_form(
                 step_id=STEP_USER,
                 data_schema=vol.Schema(
@@ -136,9 +124,67 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
                 ),
                 errors={"base": "discovery_failed"},
             )
+        if len(found) == 1:
+            return await self._async_use_discovered(found[0])
+        self._found = found
+        return await self.async_step_pick()
 
-        self._data.update({key: value for key, value in found.items() if value})
+    async def async_step_pick(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask which of several printers that answered to set up."""
+        if user_input is not None:
+            return await self._async_use_discovered(self._found[int(user_input["printer"])])
+        options = [
+            selector.SelectOptionDict(
+                value=str(index),
+                label=f"{result.model or ADAPTERS[result.protocol].label} at {result.host}",
+            )
+            for index, result in enumerate(self._found)
+        ]
+        return self.async_show_form(
+            step_id=STEP_PICK,
+            data_schema=vol.Schema(
+                {
+                    vol.Required("printer"): selector.SelectSelector(
+                        selector.SelectSelectorConfig(options=options)
+                    )
+                }
+            ),
+        )
+
+    async def _async_use_discovered(self, result: DiscoveryResult) -> ConfigFlowResult:
+        """Fill the form with what a printer said about itself, then show it."""
+        registration = ADAPTERS[result.protocol]
+        self._data.update(
+            {
+                CONF_HOST: result.host,
+                CONF_PROTOCOL: result.protocol.value,
+                CONF_NAME: result.model or registration.label,
+            }
+        )
+        # Only what this protocol's form asks for, so a printer's answer can never
+        # set a field its protocol does not use.
+        for key, value in result.prefill.items():
+            if value and (key in registration.fields or key in registration.credentials):
+                self._data[key] = value
         return await self.async_step_details()
+
+    def _already_configured(self, protocol: ProtocolId, host: str, serial: Any = None) -> bool:
+        """Return ``True`` when an entry already drives this printer.
+
+        Matched on the serial number where both sides know it, so a printer whose
+        address changed is still recognised, and on the address otherwise.
+        """
+        for entry in self._async_current_entries(include_ignore=False):
+            data = {**entry.data, **entry.options}
+            if data.get(CONF_PROTOCOL) != protocol.value:
+                continue
+            if serial and data.get(CONF_SERIAL) == serial:
+                return True
+            if data.get(CONF_HOST) == host:
+                return True
+        return False
 
     async def async_step_protocol(
         self, user_input: dict[str, Any] | None = None
@@ -225,10 +271,16 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = "invalid_config"
                 self._data["_error_detail"] = str(err)
             else:
+                # A serial number outlives an address, so it names the entry when the
+                # printer reports one. Entries made before this keep their ids.
                 await self.async_set_unique_id(
-                    f"{config.protocol.value}:{config.host}:{config.port or 0}"
+                    f"{config.protocol.value}:{config.serial}"
+                    if config.serial
+                    else f"{config.protocol.value}:{config.host}:{config.port or 0}"
                 )
                 self._abort_if_unique_id_configured()
+                if self._already_configured(config.protocol, config.host, config.serial):
+                    return self.async_abort(reason="already_configured")
                 self._data = config.as_dict(include_secrets=True)
                 if registration.unsafe:
                     return await self.async_step_unsafe()

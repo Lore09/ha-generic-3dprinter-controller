@@ -113,8 +113,11 @@ class AdapterRegistration:
     fields: tuple[str, ...] = ()
     #: Credential keys this protocol needs.
     credentials: tuple[str, ...] = ()
-    #: Default TCP ports, in the order the config flow should try them.
+    #: Default TCP ports, in the order the config flow should try them. The first
+    #: one is also discovery's hint that a host may speak this protocol.
     ports: tuple[int, ...] = ()
+    #: Words whose presence on a host's web page suggests this protocol.
+    http_markers: tuple[str, ...] = ()
     #: Commands and payload shapes that need an explicit opt-in.
     unsafe: tuple[UnsafeFeature, ...] = ()
     #: What is verified and what is inferred. Shown in diagnostics.
@@ -169,6 +172,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             ),
             fields=("port", "camera_port"),
             ports=(3030,),
+            http_markers=("elegoo",),
             unsafe=(_UNSAFE_SDCP_START_PRINT,),
             evidence={
                 "verified": (
@@ -282,6 +286,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url"),
             credentials=("api_key",),
             ports=(7125,),
+            http_markers=("moonraker", "klipper"),
             evidence={
                 "inferred": (
                     "endpoints and field names read from Moonraker's own documentation "
@@ -317,6 +322,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url", "camera_port"),
             credentials=("api_key",),
             ports=(5000, 80),
+            http_markers=("octoprint",),
             evidence={
                 "inferred": (
                     "endpoints from the OctoPrint REST API documentation and the Home "
@@ -352,6 +358,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url"),
             credentials=("password",),
             ports=(80, 443),
+            http_markers=("duet", "reprap"),
             evidence={
                 "inferred": (
                     "the RepRapFirmware object model. Cancel needs M25 followed by M0, and "

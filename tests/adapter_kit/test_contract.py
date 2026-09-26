@@ -135,3 +135,11 @@ async def test_a_printer_that_went_away_is_reported_and_recovered(harness: Adapt
     await harness.adapter.async_setup()
     snapshot = await harness.adapter.async_read()
     assert snapshot.connected
+
+
+@_with_harness()
+async def test_identifying_a_printer_sends_it_nothing(harness: AdapterHarness) -> None:
+    """Discovery may ask a printer who it is, and must never send it a command."""
+    before = harness.wire()
+    await type(harness.adapter).async_identify(harness.config.host, 0.2)
+    assert harness.wire() == before
