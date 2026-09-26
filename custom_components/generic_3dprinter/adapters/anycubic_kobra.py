@@ -110,9 +110,9 @@ CONNECT_TIMEOUT: Final = 10.0
 KEEPALIVE: Final = 60
 #: How long the first read after setup waits for the full ``info`` report.
 FIRST_INFO_TIMEOUT: Final = 3.0
-#: How long a later read waits for the ``info`` that answers its own query, so a
-#: command's effect shows in the read that follows it. Past this, the read returns
-#: what it has, and the answer is folded in when it comes.
+#: How long a later read waits for the answers to its own queries, so a command's
+#: effect shows in the read that follows it. Past this, the read returns what it
+#: has, and a late answer is folded in when it comes.
 INFO_WAIT: Final = 1.5
 #: How long a command waits for the printer to refuse it. Silence is acceptance,
 #: because an idle printer drops a job setting without answering at all.
@@ -508,8 +508,10 @@ class AnycubicKobraProtocol(Protocol):
         self._client: MqttClient | None = None
         self._state: dict[str, Any] = {}
         self._have_info = asyncio.Event()
-        #: Set by every ``info`` report, cleared by each read before it asks.
-        self._fresh_info = asyncio.Event()
+        #: The report types a read asked for and has not had yet, and the event set
+        #: once every one of them has answered.
+        self._awaiting: set[str] = set()
+        self._answered = asyncio.Event()
         self._lights: list[Mapping[str, Any]] = []
         self._peripherie: Mapping[str, Any] | None = None
         self._boxes: dict[int, dict[str, Any]] = {}
@@ -721,10 +723,13 @@ class AnycubicKobraProtocol(Protocol):
             return
         if not isinstance(data, Mapping):
             return
+        if kind in self._awaiting:
+            self._awaiting.discard(kind)
+            if not self._awaiting:
+                self._answered.set()
         if kind == "info":
             self._state = dict(data)
             self._have_info.set()
-            self._fresh_info.set()
         elif kind == "tempature":
             temp = dict(_mapping(self._state.get("temp")))
             fold(temp, data)
@@ -776,10 +781,13 @@ class AnycubicKobraProtocol(Protocol):
         await self._async_publish("web", kind, "getInfo" if kind == "multiColorBox" else "query")
 
     async def _async_query_all(self) -> None:
-        for kind in QUERY_TYPES:
-            await self._async_query(kind)
+        kinds = [*QUERY_TYPES]
         if Capability.FILAMENT_SLOTS in self.capabilities:
-            await self._async_query("multiColorBox")
+            kinds.append("multiColorBox")
+        self._awaiting = set(kinds)
+        self._answered.clear()
+        for kind in kinds:
+            await self._async_query(kind)
 
     async def _async_command(self, kind: str, action: str, data: Any = None, *, source: str = "web") -> None:
         """Send a command, raising when the printer refuses it within the window.
@@ -835,17 +843,15 @@ class AnycubicKobraProtocol(Protocol):
             self._silent_reads = 0
         self._reports = 0
         first = not self._have_info.is_set()
-        self._fresh_info.clear()
         try:
             await self._async_query_all()
         except UnreachableError:
             await self._async_close()
             raise
-        try:
-            await asyncio.wait_for(self._fresh_info.wait(), timeout=FIRST_INFO_TIMEOUT if first else INFO_WAIT)
-        except TimeoutError:
-            if first:
-                raise UnreachableError("the printer is connected but did not report its state") from None
+        with suppress(TimeoutError):
+            await asyncio.wait_for(self._answered.wait(), timeout=FIRST_INFO_TIMEOUT if first else INFO_WAIT)
+        if first and not self._have_info.is_set():
+            raise UnreachableError("the printer is connected but did not report its state")
         return self._snapshot()
 
     def _snapshot(self) -> PrinterSnapshot:

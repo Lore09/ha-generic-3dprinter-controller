@@ -95,6 +95,7 @@ async def test_the_kobra_x_uses_its_own_commands(kobra_x, session) -> None:
         await adapter.async_send(Command.SET_BED_TEMP, value=65)
         await adapter.async_send(Command.SET_FAN_SPEED, value=40)
         await adapter.async_send(Command.SET_LIGHT, on=False)
+        assert (await adapter.async_read()).lights == frozenset(), "the read after a command shows it"
         await adapter.async_send(Command.SET_SPEED, value=50)
         await adapter.async_send(Command.SET_AUTO_REFILL, on=False)
         with pytest.raises(ProtocolError, match="part-cooling"):
