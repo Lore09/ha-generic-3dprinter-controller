@@ -412,8 +412,9 @@ class SdcpProtocol(Protocol):
         later reconnect a silent no-op and the integration sticks at offline until
         somebody reloads it by hand.
         """
-        if not self._connected:
-            await self._reset_socket()
+        if self._connected:
+            return
+        await self._reset_socket()
 
         self._attributes_event.clear()
         try:
