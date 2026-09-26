@@ -167,6 +167,7 @@ async function mountCard({
   files = [],
   confirm = true,
   describe,
+  beforeMount,
 } = {}) {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     runScripts: "outside-only",
@@ -192,6 +193,7 @@ async function mountCard({
 
   const source = readFileSync(CARD_PATH, "utf8");
   window.eval(source);
+  if (beforeMount) beforeMount(window);
 
   const calls = [];
   const services = [];
@@ -485,6 +487,47 @@ test("a poll that signs a new url does not restart the stream", async () => {
   assert.ok(counter >= 3);
   assert.equal(card.shadowRoot.querySelector(".camera img"), image, "the image element was rebuilt");
   assert.equal(image.getAttribute("src"), before);
+});
+
+test("a stream camera is played by Home Assistant's own camera card", async () => {
+  const created = [];
+  const { card, window, hass } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Kobra" }],
+    descriptions: {
+      entry1: description({
+        camera_kind: "stream",
+        camera_entity_id: "camera.kobra",
+        camera_url: null,
+        snapshot_url: null,
+        printer: snapshot({ capabilities: ["pause", "camera_stream"] }),
+      }),
+    },
+    beforeMount(win) {
+      win.loadCardHelpers = async () => ({
+        createCardElement(config) {
+          const element = win.document.createElement("div");
+          element.className = "ha-stream-card";
+          created.push({ config: JSON.parse(JSON.stringify(config)), element });
+          return element;
+        },
+      });
+    },
+  });
+  await tick(40);
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].config, {
+    type: "picture-entity",
+    entity: "camera.kobra",
+    camera_view: "live",
+    show_name: false,
+    show_state: false,
+  });
+  assert.equal(created[0].element.hass, hass);
+  const frame = card.shadowRoot.querySelector(".camera-frame");
+  assert.ok(frame.contains(created[0].element));
+  assert.equal(frame.querySelector("img"), null, "a stream camera must not open an MJPEG url");
+  assert.ok(visible(frame));
+  void window;
 });
 
 test("the camera can be hidden from the configuration", async () => {

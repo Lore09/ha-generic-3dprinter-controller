@@ -1533,7 +1533,12 @@ class PrinterView {
     const description = this.description;
     const live = description.camera_url;
     const still = description.snapshot_url;
-    const wanted = this.card.showCamera() && caps.includes("camera") && Boolean(live || still);
+    const streamed = description.camera_kind === "stream";
+    const wanted =
+      this.card.showCamera() &&
+      (streamed
+        ? caps.includes("camera_stream") && Boolean(description.camera_entity_id)
+        : caps.includes("camera") && Boolean(live || still));
     this.cameraColumn.hidden = !wanted;
     this.body.classList.toggle("with-camera", wanted);
     if (!wanted) {
@@ -1546,6 +1551,12 @@ class PrinterView {
       this.cameraPlaceholder.textContent = "Switched off";
       this.cameraPlaceholder.hidden = false;
       this.cameraOverlay.hidden = true;
+      return;
+    }
+
+    if (streamed) {
+      this._showStream(description.camera_entity_id);
+      this._paintCameraOverlay();
       return;
     }
 
@@ -1591,7 +1602,60 @@ class PrinterView {
       if (this.image.getAttribute("src") !== src) this.image.src = src;
     }
     this.image.hidden = false;
+    this._paintCameraOverlay();
+  }
 
+  /**
+   * Embed Home Assistant's own camera card for a printer whose camera is a video
+   * stream. Home Assistant plays it and shares one upstream connection between
+   * viewers, so the card neither ships a player nor opens the printer itself. The
+   * card is built once per entity and only handed the new `hass` on each update.
+   */
+  _showStream(entityId) {
+    if (this.image) this.image.hidden = true;
+    const hass = this.card.hass;
+    if (this.streamCard && this.streamEntity === entityId) {
+      this.streamCard.hass = hass;
+      this.streamCard.hidden = false;
+      return;
+    }
+    if (this.streamLoading === entityId) return;
+    this.streamLoading = entityId;
+    if (this.streamCard) this.streamCard.remove();
+    this.streamCard = null;
+    const helpers = typeof window.loadCardHelpers === "function" ? window.loadCardHelpers() : null;
+    if (!helpers) {
+      this.cameraPlaceholder.textContent = "Camera unavailable";
+      this.cameraPlaceholder.hidden = false;
+      this.streamLoading = null;
+      return;
+    }
+    Promise.resolve(helpers)
+      .then((loaded) => {
+        const element = loaded.createCardElement({
+          type: "picture-entity",
+          entity: entityId,
+          camera_view: "live",
+          show_name: false,
+          show_state: false,
+        });
+        element.classList.add("stream-card");
+        element.hass = this.card.hass;
+        this.streamCard = element;
+        this.streamEntity = entityId;
+        this.cameraFrame.insertBefore(element, this.cameraFrame.firstChild);
+        this.cameraPlaceholder.hidden = true;
+      })
+      .catch(() => {
+        this.cameraPlaceholder.textContent = "Camera unavailable";
+        this.cameraPlaceholder.hidden = false;
+      })
+      .finally(() => {
+        this.streamLoading = null;
+      });
+  }
+
+  _paintCameraOverlay() {
     const snapshot = this.snapshot;
     this.cameraOverlay.replaceChildren();
     const state = snapshot.print_state || "unknown";
@@ -1624,6 +1688,7 @@ class PrinterView {
   }
 
   _suspendCamera() {
+    if (this.streamCard) this.streamCard.hidden = true;
     if (!this.image || this.camera.suspended) return;
     this.camera.suspended = true;
     this.image.removeAttribute("src");
@@ -2358,6 +2423,7 @@ class Generic3DPrinterCard extends HTMLElement {
         aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
       }
       .camera img { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+      .camera .stream-card { width: 100%; height: 100%; display: block; --ha-card-border-radius: 0; --ha-card-box-shadow: none; }
       .camera-error { color: #bbb; font-size: 0.85rem; }
       .camera-overlay { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
       .overlay-chip { color: #fff; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
