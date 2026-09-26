@@ -326,7 +326,7 @@ component. Entity names come from there, not from `strings.json`.
 python -m venv .venv
 .venv/bin/pip install -r requirements-test.txt
 .venv/bin/python -m pytest -q  # the Python suite, about ten seconds
-npm install && npm test        # the card tests, Node 20 or newer
+npm install && npm test        # the card tests, Node 22.12 or newer
 ```
 
 `requirements-test.txt` pins the Home Assistant test harness, and through it the
