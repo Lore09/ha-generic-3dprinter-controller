@@ -229,10 +229,48 @@ async def web_only_harness(
         yield harness
 
 
+@asynccontextmanager
+async def kobra_harness(
+    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AdapterHarness]:
+    """An Anycubic Kobra X in LAN mode, printing, over MQTT with TLS."""
+    from custom_components.generic_3dprinter.adapters import anycubic_kobra
+    from tests.fake_kobra_printer import SERIAL, FakeKobraPrinter
+
+    monkeypatch.setattr(anycubic_kobra, "ANSWER_WINDOW", 0.5)
+    monkeypatch.setattr(anycubic_kobra, "FIRST_INFO_TIMEOUT", 1.0)
+    monkeypatch.setattr(anycubic_kobra, "INFO_WAIT", 0.5)
+    printer = FakeKobraPrinter()
+    await printer.start()
+    config = parse_config(
+        {
+            "name": "contract",
+            "protocol": ProtocolId.ANYCUBIC_KOBRA.value,
+            "host": "127.0.0.1",
+            "port": printer.port,
+            "serial": SERIAL,
+        }
+    )
+    try:
+        yield AdapterHarness(
+            protocol=ProtocolId.ANYCUBIC_KOBRA,
+            config=config,
+            adapter=build_adapter(config, session),
+            wire=lambda: len(printer.commands),
+            connections=lambda: printer.sessions,
+            power_off=printer.stop,
+            power_on=printer.start,
+        )
+    finally:
+        await printer.stop()
+        printer.close()
+
+
 #: Every protocol's harness. The registry test holds this complete.
 HARNESSES: dict[ProtocolId, HarnessFactory] = {
     ProtocolId.SDCP_CC1: sdcp_harness,
     ProtocolId.ELEGOO_CC2: cc2_harness,
+    ProtocolId.ANYCUBIC_KOBRA: kobra_harness,
     ProtocolId.MOONRAKER: moonraker_harness,
     ProtocolId.OCTOPRINT: octoprint_harness,
     ProtocolId.DUET: duet_harness,

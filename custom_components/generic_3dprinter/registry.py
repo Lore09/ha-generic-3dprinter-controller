@@ -29,6 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 ADAPTER_MODULES: Final[tuple[str, ...]] = (
     "sdcp",
     "elegoo_cc2",
+    "anycubic_kobra",
     "moonraker",
     "octoprint",
     "duet",
@@ -88,6 +89,72 @@ _UNSAFE_CC2_START_PRINT: Final = UnsafeFeature(
         "method 1020 and its config object come from Elegoo's elegoo-link SDK; the "
         "remembered levelling choice and the silent tray fallback were measured by "
         "danielcherubini/elegoo-homeassistant on firmware 02.01.00.00"
+    ),
+)
+
+_UNSAFE_KOBRA_START_PRINT: Final = UnsafeFeature(
+    id="kobra_start_print",
+    label="Allow starting a print over the network",
+    reason=(
+        "Starting a print heats and moves the printer with nobody at it. On an "
+        "Anycubic Kobra the start request is documented only for the Kobra 3, "
+        "through custom firmware; on the other models it has not been measured. "
+        "Enable this only if you accept that a print can start while the bed is not "
+        "clear."
+    ),
+    gates=frozenset({Capability.START_PRINT}),
+    evidence="the minimal print/start payload from the Rinkhals MQTT documentation, Kobra 3",
+)
+
+#: What every Kobra of the signed-handshake generation can express.
+_KOBRA_BASE: Final = frozenset(
+    {
+        Capability.START_PRINT,
+        Capability.PAUSE,
+        Capability.RESUME,
+        Capability.STOP,
+        Capability.SET_HOTEND_TEMP,
+        Capability.SET_BED_TEMP,
+        Capability.SET_FAN_SPEED,
+        Capability.SET_SPEED,
+        Capability.SET_LIGHT,
+        Capability.FILE_LIST,
+        Capability.CAMERA_STREAM,
+        Capability.FILAMENT_SLOTS,
+        Capability.SET_AUTO_REFILL,
+    }
+)
+_KOBRA_SOURCE: Final = (
+    "chrisfore/anycubic_ha_local, captured on a Kobra S1 Max and confirmed on this "
+    "model from a user's diagnostics"
+)
+
+KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
+    ModelProfile(
+        id="20030",
+        name="Anycubic Kobra X",
+        capabilities=_KOBRA_BASE | {Capability.HOME, Capability.JOG},
+        evidence=(
+            "handshake, reports and built-in unit from chrisfore/anycubic_ha_local's "
+            "Kobra X diagnostics; tempature/set, fan/setSpeed, light type 3 and "
+            "axis/move from stribor/anycubic_kobrax, written by a Kobra X owner"
+        ),
+    ),
+    ModelProfile(id="20024", name="Anycubic Kobra 3", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20026", name="Anycubic Kobra 3 Max", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20027", name="Anycubic Kobra 3 V2", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20028", name="Anycubic Kobra 4", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(
+        id="20025",
+        name="Anycubic Kobra S1",
+        capabilities=_KOBRA_BASE | {Capability.CHAMBER_SENSOR},
+        evidence=_KOBRA_SOURCE,
+    ),
+    ModelProfile(
+        id="20029",
+        name="Anycubic Kobra S1 Max",
+        capabilities=_KOBRA_BASE | {Capability.CHAMBER_SENSOR},
+        evidence="captured by chrisfore/anycubic_ha_local on firmware 2.6.9.6",
     ),
 )
 
@@ -258,6 +325,33 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             },
             family="elegoo_centauri",
             model="Centauri Carbon 2",
+        ),
+        ProtocolId.ANYCUBIC_KOBRA: AdapterRegistration(
+            id=ProtocolId.ANYCUBIC_KOBRA,
+            label="Anycubic Kobra (LAN mode)",
+            adapter=_resolve(_ADAPTER_MODULES["anycubic_kobra"], "AnycubicKobraProtocol"),  # type: ignore[arg-type]
+            capabilities=_KOBRA_BASE | {Capability.HOME, Capability.JOG, Capability.CHAMBER_SENSOR},
+            models=KOBRA_MODELS,
+            fields=("port", "serial"),
+            ports=(18910,),
+            unsafe=(_UNSAFE_KOBRA_START_PRINT,),
+            evidence={
+                "inferred": (
+                    "no Kobra has been measured by this project yet. The handshake, the "
+                    "report shapes and the print commands come from "
+                    "chrisfore/anycubic_ha_local, captured on a Kobra S1 Max; the Kobra "
+                    "X's own commands from stribor/anycubic_kobrax; the file list from "
+                    "rvanderp3/kobra-connect; starting a print from the Rinkhals "
+                    "documentation. tools/acceptance_kobra.py checks them on a printer"
+                ),
+                "absent": (
+                    "upload, because no source records the body its endpoint takes; "
+                    "deleting a file, until the file list is confirmed on a printer; "
+                    "loading and unloading filament, which the LAN protocol has no "
+                    "command for; drying, humidity and remaining filament, which the "
+                    "shared model has no field for"
+                ),
+            },
         ),
         ProtocolId.MOONRAKER: AdapterRegistration(
             id=ProtocolId.MOONRAKER,

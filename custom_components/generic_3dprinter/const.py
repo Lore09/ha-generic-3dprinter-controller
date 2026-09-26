@@ -185,6 +185,7 @@ class ProtocolId(StrEnum):
 
     SDCP_CC1 = "sdcp_cc1"
     ELEGOO_CC2 = "elegoo_cc2"
+    ANYCUBIC_KOBRA = "anycubic_kobra"
     MOONRAKER = "moonraker"
     OCTOPRINT = "octoprint"
     DUET = "duet"
