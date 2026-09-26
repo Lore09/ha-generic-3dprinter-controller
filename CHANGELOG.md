@@ -4,6 +4,14 @@
 
 **Added**
 
+* **The Anycubic Kobra 3, Kobra 4, Kobra S1 and Kobra X**, in LAN mode, added with
+  their address alone. Status, temperatures, fans, speed, the light, pause, resume
+  and stop; home and jog on the Kobra X; the Kobra X's built-in four-colour changer
+  and any ACE as a multi-material unit with auto-feed; the camera as a stream; the
+  file list; and starting a print as an opt-in. On the Kobra 3, 4 and S1,
+  temperatures, fans and speed apply only during a print, and the card says so.
+  Built from other projects' published work and not yet run against a printer:
+  every model is marked unverified, and `tools/acceptance_kobra.py` checks one.
 * **Controls say why they are refused.** A printer now reports the commands it
   supports but will not take right now, with the reason, such as a Centauri Carbon
   2 that moves its head only while idle. The card draws those controls disabled and
