@@ -724,9 +724,10 @@ test("the home buttons home the axes they name", async () => {
   assert.equal(all(card, ".axis.homed").length, 2);
 });
 
-test("the head cannot be moved while a job is running", async () => {
+test("the head cannot be moved while the printer refuses it, and the card says why", async () => {
   const cc2 = idleCc2();
   cc2.printer.print_state = "printing";
+  cc2.printer.blocked = { home: "the printer is not idle", jog: "the printer is not idle" };
   const { card, calls } = await mountCard({
     printers: [{ entry_id: "entry1", name: "CC2" }],
     descriptions: { entry1: cc2 },
@@ -738,7 +739,50 @@ test("the head cannot be moved while a job is running", async () => {
   joystick.dispatchEvent(new card.ownerDocument.defaultView.KeyboardEvent("keydown", { key: "ArrowUp" }));
   await tick();
   assert.deepEqual(sent(calls), []);
-  assert.match(card.shadowRoot.querySelector(".motion-hint").textContent, /cannot be moved/);
+  assert.match(card.shadowRoot.querySelector(".motion-hint").textContent, /not idle/);
+});
+
+test("the card leaves motion to the printer's own rules", async () => {
+  // A printer that reports nothing blocked may be moved, whatever its state.
+  const cc2 = idleCc2();
+  cc2.printer.print_state = "printing";
+  const { card, calls } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  assert.ok(command(card, "jog").every((node) => !node.disabled));
+  command(card, "home")[0].click();
+  await tick();
+  assert.equal(sent(calls).length, 1);
+});
+
+test("a setting the printer refuses now is disabled, with the printer's reason", async () => {
+  const cc2 = idleCc2();
+  cc2.printer.blocked = { set_bed_temp: "the printer applies this only during a print" };
+  const { card, calls } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  const bed = card.shadowRoot.querySelector('.heater[data-heater="bed"]');
+  const nozzle = card.shadowRoot.querySelector('.heater[data-heater="hotend"]');
+  assert.ok([...bed.querySelectorAll("button, input")].every((node) => node.disabled));
+  assert.ok([...nozzle.querySelectorAll("button, input")].every((node) => !node.disabled));
+  assert.match(card.shadowRoot.querySelector(".heater-hint").textContent, /only during a print/);
+  assert.deepEqual(sent(calls), []);
+});
+
+test("a refused fan or speed setting says why", async () => {
+  const cc2 = idleCc2();
+  cc2.printer.blocked = { set_speed: "only during a print", set_fan_speed: "only during a print" };
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  assert.ok(all(card, ".fans input").every((node) => node.disabled));
+  assert.match(card.shadowRoot.querySelector(".fan-hint").textContent, /only during a print/);
 });
 
 // ------------------------------------------------------------------- power
@@ -1045,6 +1089,10 @@ function canvasCc2({ commands = FILAMENT_COMMANDS, system = canvasSystem(), stat
   cc2.printer.capabilities = [...cc2.printer.capabilities, "filament_slots", ...commands];
   cc2.printer.filament = system;
   cc2.printer.print_state = state;
+  if (state !== "idle") {
+    const reason = "the printer is not idle";
+    cc2.printer.blocked = { load_filament: reason, unload_filament: reason, set_filament: reason, home: reason, jog: reason };
+  }
   return cc2;
 }
 
@@ -1247,7 +1295,7 @@ test("the slots cannot be changed while the printer is busy", async () => {
   for (const name of [".fd-load", ".fd-unload", ".fd-edit"]) {
     assert.equal(dialog.querySelector(name).disabled, true, `${name} is enabled mid-print`);
   }
-  assert.match(dialog.querySelector(".fd-note").textContent, /busy/);
+  assert.match(dialog.querySelector(".fd-note").textContent, /not idle/);
 });
 
 test("what the unit is doing is shown on the card and in the popup", async () => {
