@@ -19,24 +19,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import struct
 from contextlib import suppress
 from typing import Any
 
-from custom_components.generic_3dprinter.mqtt_client import (
-    CONNACK,
-    CONNECT,
-    DISCONNECT,
-    PINGREQ,
-    PINGRESP,
-    PUBLISH,
-    SUBACK,
-    SUBSCRIBE,
-    decode_publish,
-    encode_publish,
-    packet,
-    read_packet,
-)
+from tests.adapter_kit.fake_broker import BrokerSession, FakeBroker
 
 SERIAL = "F01BXKSWL13QAZJ"
 DEFAULT_CODE = "123456"
@@ -160,18 +146,6 @@ def _merge(base: dict[str, Any], delta: dict[str, Any]) -> None:
             base[key] = value
 
 
-class _Session:
-    def __init__(self, writer: asyncio.StreamWriter) -> None:
-        self.writer = writer
-        self.client_id = ""
-        self.topics: set[str] = set()
-
-    async def send(self, data: bytes) -> None:
-        with suppress(OSError, RuntimeError):
-            self.writer.write(data)
-            await self.writer.drain()
-
-
 class FakeCC2Printer:
     """A loopback Centauri Carbon 2."""
 
@@ -197,15 +171,17 @@ class FakeCC2Printer:
         self.requests: list[dict[str, Any]] = []
         self.pings = 0
         self.registered: list[str] = []
-        self.connects = 0
         self.uploads: list[dict[str, Any]] = []
         self.camera_connections = 0
         self.port = 0
         self.camera_port = 0
         self.upload_port = 0
         self._sequence = 0
-        self._sessions: set[_Session] = set()
-        self._server: asyncio.base_events.Server | None = None
+        self._broker = FakeBroker(
+            authenticate=self._authenticate,
+            on_publish=self._on_publish,
+            on_disconnect=self._on_disconnect,
+        )
         self._runners: list[Any] = []
 
     @property
@@ -223,8 +199,9 @@ class FakeCC2Printer:
         """Start the broker and the two HTTP servers, keeping earlier ports."""
         from aiohttp import web
 
-        self._server = await asyncio.start_server(self._serve, "127.0.0.1", self.port or 0)
-        self.port = self._server.sockets[0].getsockname()[1]
+        self._broker.port = self.port
+        await self._broker.start()
+        self.port = self._broker.port
 
         camera = web.Application()
         camera.router.add_route("GET", "/{tail:.*}", self._camera)
@@ -246,14 +223,7 @@ class FakeCC2Printer:
 
     async def stop(self) -> None:
         """Power off: every client connection dies with the printer."""
-        for session in list(self._sessions):
-            session.writer.close()
-        self._sessions.clear()
-        if self._server is not None:
-            self._server.close()
-            with suppress(Exception):
-                await asyncio.wait_for(self._server.wait_closed(), timeout=2)
-            self._server = None
+        await self._broker.stop()
         for runner in self._runners:
             with suppress(Exception):
                 await runner.cleanup()
@@ -262,75 +232,27 @@ class FakeCC2Printer:
 
     # ------------------------------------------------------------------ broker
 
-    async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        session = _Session(writer)
-        try:
-            kind, _flags, body = await read_packet(reader)
-            if kind != CONNECT:
-                return
-            session.client_id, password = self._parse_connect(body)
-            self.connects += 1
-            if password != self.access_code:
-                await session.send(packet(CONNACK, 0, b"\x00\x05"))
-                return
-            await session.send(packet(CONNACK, 0, b"\x00\x00"))
-            self._sessions.add(session)
-            while True:
-                kind, flags, body = await read_packet(reader)
-                if kind == SUBSCRIBE:
-                    await self._subscribe(session, body)
-                elif kind == PUBLISH:
-                    topic, payload, _qos, _id = decode_publish(flags, body)
-                    await self._publish_in(session, topic, json.loads(payload))
-                elif kind == PINGREQ:
-                    await session.send(packet(PINGRESP, 0))
-                elif kind == DISCONNECT:
-                    return
-        except (asyncio.IncompleteReadError, ConnectionError, OSError):
-            return
-        finally:
-            self._sessions.discard(session)
-            if session.client_id in self.registered:
-                self.registered.remove(session.client_id)
-            writer.close()
+    @property
+    def connects(self) -> int:
+        """Return how many connections the broker has been asked for."""
+        return self._broker.connects
 
-    @staticmethod
-    def _parse_connect(body: bytes) -> tuple[str, str | None]:
-        offset = 2 + struct.unpack("!H", body[:2])[0]
-        flags = body[offset + 1]
-        offset += 4
+    def _authenticate(self, session: BrokerSession, password: str | None) -> int:
+        assert session.username in (None, "elegoo")
+        return 0 if password == self.access_code else 5
 
-        def string() -> str:
-            nonlocal offset
-            (length,) = struct.unpack("!H", body[offset : offset + 2])
-            value = body[offset + 2 : offset + 2 + length].decode()
-            offset += 2 + length
-            return value
+    def _on_disconnect(self, session: BrokerSession) -> None:
+        if session.client_id in self.registered:
+            self.registered.remove(session.client_id)
 
-        client_id = string()
-        username = string() if flags & 0x80 else None
-        password = string() if flags & 0x40 else None
-        assert username in (None, "elegoo")
-        return client_id, password
-
-    async def _subscribe(self, session: _Session, body: bytes) -> None:
-        packet_id = body[:2]
-        offset, granted = 2, b""
-        while offset < len(body):
-            (length,) = struct.unpack("!H", body[offset : offset + 2])
-            session.topics.add(body[offset + 2 : offset + 2 + length].decode())
-            offset += 2 + length + 1
-            granted += b"\x00"
-        await session.send(packet(SUBACK, 0, packet_id + granted))
+    async def _on_publish(self, session: BrokerSession, topic: str, payload: bytes) -> None:
+        await self._publish_in(session, topic, json.loads(payload))
 
     async def deliver(self, topic: str, message: dict[str, Any]) -> None:
         """Publish ``message`` to every client subscribed to ``topic``."""
-        data = encode_publish(topic, json.dumps(message).encode())
-        for session in list(self._sessions):
-            if topic in session.topics:
-                await session.send(data)
+        await self._broker.deliver(topic, message)
 
-    async def _publish_in(self, session: _Session, topic: str, message: dict[str, Any]) -> None:
+    async def _publish_in(self, session: BrokerSession, topic: str, message: dict[str, Any]) -> None:
         if not self.answering:
             return
         if topic == f"elegoo/{SERIAL}/api_register":
