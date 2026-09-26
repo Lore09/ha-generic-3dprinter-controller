@@ -13,8 +13,8 @@ refused before any vendor code runs.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -29,7 +29,9 @@ from .const import (
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
     Capability,
+    STATE_CHANGING_COMMANDS,
     Command,
+    PrintState,
     ProtocolId,
     UnsafeFeature,
 )
@@ -118,6 +120,51 @@ class UnsafeCommandError(ProtocolError):
             f"Enable it in the integration options if you accept the risk."
         )
         self.feature = feature
+
+
+class CommandBlockedError(ProtocolError):
+    """The printer supports the command but will not take it in its current state."""
+
+    def __init__(self, command: Command, reason: str) -> None:
+        """Name the command and the printer's reason."""
+        super().__init__(f"{command.value} is not possible now: {reason}")
+        self.command = command
+        self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class BlockRule:
+    """Commands a printer refuses while ``when`` holds for its latest snapshot.
+
+    Rules are data an adapter declares, so the card, the entities and the guard in
+    :meth:`Protocol.async_send` all read one computed set and cannot disagree.
+    """
+
+    commands: frozenset[Command]
+    when: Callable[[PrinterSnapshot], bool]
+    reason: str
+
+
+def job_active(snapshot: PrinterSnapshot) -> bool:
+    """Return ``True`` while a job is being prepared, printed or held."""
+    return snapshot.print_state in (PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED)
+
+
+def not_idle(snapshot: PrinterSnapshot) -> bool:
+    """Return ``True`` unless the printer says it is idle."""
+    return snapshot.print_state is not PrintState.IDLE
+
+
+#: Every printer refuses to move its head, start a job or swap filament during a
+#: job. The card used to enforce this itself; it is a rule now, so an adapter can
+#: tighten it and a user reads the reason.
+DEFAULT_BLOCK_RULES: Final[tuple[BlockRule, ...]] = (
+    BlockRule(
+        STATE_CHANGING_COMMANDS,
+        when=job_active,
+        reason="the printer is busy with a job",
+    ),
+)
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int, label: str) -> int:
@@ -319,6 +366,11 @@ def parse_config(
 class Protocol(ABC):
     """Transport adapter for one printer. One instance per config entry."""
 
+    #: The printer's state rules. An adapter extends the defaults rather than
+    #: replacing them, unless its printer is known to allow more, and puts its own
+    #: rules first: the first rule that blocks a command gives its reason.
+    block_rules: tuple[BlockRule, ...] = DEFAULT_BLOCK_RULES
+
     def __init__(
         self,
         config: PrinterConfig,
@@ -332,6 +384,7 @@ class Protocol(ABC):
         self._session = session
         self._granted = granted
         self._unsafe = unsafe
+        self._last_snapshot: PrinterSnapshot | None = None
 
     @property
     def config(self) -> PrinterConfig:
@@ -387,9 +440,39 @@ class Protocol(ABC):
         """Close sockets and subscriptions. Idempotent."""
         raise NotImplementedError
 
-    @abstractmethod
+    @property
+    def last_snapshot(self) -> PrinterSnapshot | None:
+        """Return the snapshot of the last successful read, if any."""
+        return self._last_snapshot
+
     async def async_read(self) -> PrinterSnapshot:
-        """Return one complete snapshot of printer state.
+        """Return one complete snapshot, with capabilities and state rules applied.
+
+        Raises :class:`UnreachableError` or :class:`AuthError`. Adapters implement
+        :meth:`_async_read`; this wrapper is what makes every snapshot carry the
+        granted capabilities and the blocked commands, whatever the adapter built.
+        """
+        snapshot = await self._async_read()
+        capabilities = self.capabilities
+        snapshot = replace(snapshot, capabilities=capabilities)
+        snapshot = replace(snapshot, blocked=MappingProxyType(self._blocked(snapshot)))
+        self._last_snapshot = snapshot
+        return snapshot
+
+    def _blocked(self, snapshot: PrinterSnapshot) -> dict[Command, str]:
+        """Return the granted commands the rules refuse for ``snapshot``."""
+        blocked: dict[Command, str] = {}
+        for rule in self.block_rules:
+            if not rule.when(snapshot):
+                continue
+            for command in sorted(rule.commands):
+                if command_capability(command) in snapshot.capabilities:
+                    blocked.setdefault(command, rule.reason)
+        return blocked
+
+    @abstractmethod
+    async def _async_read(self) -> PrinterSnapshot:
+        """Read the printer once and return what it reported.
 
         Raises :class:`UnreachableError` or :class:`AuthError`. Never raises for a
         field the protocol cannot express: that field stays ``None``.
@@ -413,6 +496,17 @@ class Protocol(ABC):
             validated = validate_params(command, params)
         except ParamError as err:
             raise ProtocolError(str(err)) from err
+
+        # The rules need a state to judge. A command before the first read reads the
+        # printer once, so none slips past them; and a command the last snapshot
+        # blocks is judged again on a fresh read, because the snapshot can be a poll
+        # old and a print that just ended must not keep the head locked.
+        snapshot = self._last_snapshot
+        if snapshot is None or command in snapshot.blocked:
+            snapshot = await self.async_read()
+        reason = snapshot.blocked.get(command)
+        if reason is not None:
+            raise CommandBlockedError(command, reason)
 
         await self._async_dispatch(command, validated)
 

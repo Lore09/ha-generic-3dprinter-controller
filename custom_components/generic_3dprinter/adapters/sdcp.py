@@ -703,7 +703,7 @@ class SdcpProtocol(Protocol):
 
     # ------------------------------------------------------------------- read
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot, reconnecting when the session is gone.
 
         Connecting is part of reading, not something the caller has to remember. A

@@ -71,13 +71,16 @@ from ..models import (
 from ..mjpeg import jpeg_frames
 from ..mqtt_client import MqttClient, MqttError, MqttRefusedError
 from ..protocols import (
+    DEFAULT_BLOCK_RULES,
     AuthError,
+    BlockRule,
     CommandRejectedError,
     ConfigError,
     PrinterConfig,
     Protocol,
     ProtocolError,
     UnreachableError,
+    not_idle,
 )
 from .elegoo_canvas import (
     ACTIVITY_BY_SUB_STATUS,
@@ -464,6 +467,26 @@ def lan_only_hint(discovery: DiscoveryResult | None) -> str:
 
 class ElegooCC2Protocol(Protocol):
     """The Centauri Carbon 2 over its own MQTT broker, with the camera on HTTP."""
+
+    #: Moving the head, or loading, unloading or editing a CANVAS slot, collides
+    #: with the firmware's own moves unless the printer is idle; levelling and
+    #: homing count as busy too.
+    block_rules = (
+        BlockRule(
+            frozenset(
+                {
+                    Command.HOME,
+                    Command.JOG,
+                    Command.LOAD_FILAMENT,
+                    Command.UNLOAD_FILAMENT,
+                    Command.SET_FILAMENT,
+                }
+            ),
+            when=not_idle,
+            reason="the printer is not idle",
+        ),
+        *DEFAULT_BLOCK_RULES,
+    )
 
     def __init__(
         self,
@@ -881,7 +904,7 @@ class ElegooCC2Protocol(Protocol):
 
     # ------------------------------------------------------------------- read
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot, reconnecting when the session is gone.
 
         Between full reads the snapshot comes from the merged deltas, which the
@@ -1056,25 +1079,12 @@ class ElegooCC2Protocol(Protocol):
         with suppress(_NoAnswerError):
             await self._async_send_checked(name, params, timeout=RESUME_REFUSAL_WINDOW)
 
-    def _require_idle(self, action: str) -> None:
-        """Refuse a motion command unless the printer says it is idle.
-
-        Moving the head during a print, or while the printer levels or loads
-        filament, collides with the firmware's own moves, so the only state in which
-        one is sent is the one where nothing else is moving.
-        """
-        status = _integer(_mapping(self._status.get("machine_status")).get("status"))
-        if status != 1:
-            raise ProtocolError(f"refusing to {action}: the printer is not idle")
-
     async def _async_home(self, params: Mapping[str, Any]) -> None:
         """Home the given axes, lower case as Elegoo's SDK sends them."""
-        self._require_idle("home")
         await self._async_send_unhurried("home", {"homed_axes": str(params["axes"]).lower()})
 
     async def _async_jog(self, params: Mapping[str, Any]) -> None:
         """Move one axis by a relative distance in millimetres."""
-        self._require_idle("move the head")
         await self._async_send_unhurried(
             "move", {"axes": str(params["axis"]).lower(), "distance": float(params["distance"])}
         )
@@ -1124,7 +1134,6 @@ class ElegooCC2Protocol(Protocol):
 
     async def _async_load_filament(self, params: Mapping[str, Any]) -> None:
         """Feed a slot into the nozzle: the printer heats, cuts the old filament, feeds."""
-        self._require_idle("load filament")
         target = self._require_slot(params)
         slot = self._canvas.slot(target["canvas_id"], target["tray_id"]) if self._canvas else None
         if slot is not None and not slot.loaded:
@@ -1134,14 +1143,12 @@ class ElegooCC2Protocol(Protocol):
 
     async def _async_unload_filament(self, params: Mapping[str, Any]) -> None:
         """Pull a slot's filament back out of the nozzle."""
-        self._require_idle("unload filament")
         target = self._require_slot(params)
         self._canvas_stale = True
         await self._async_send_unhurried("unload_filament", target)
 
     async def _async_set_filament(self, params: Mapping[str, Any]) -> None:
         """Record the filament in a slot, in the fields Elegoo's page sends."""
-        self._require_idle("change a slot's filament")
         target = self._require_slot(params)
         try:
             payload = edit_payload({**params, "unit": target["canvas_id"]})

@@ -188,9 +188,9 @@ class ProtocolId(StrEnum):
     WEB_ONLY = "web_only"
 
 
-#: Commands that ask the machine to change what it is doing. Only these are
-#: refused while an unsafe-gated printer is working, because interrupting a job
-#: destroys the part and, on some firmware, the printer's control daemon.
+#: Commands that ask the machine to change what it is doing. Every printer refuses
+#: them while a job is running, through the default state rule in ``protocols``,
+#: because interrupting a job destroys the part.
 STATE_CHANGING_COMMANDS: Final[frozenset[Command]] = frozenset(
     {
         Command.START_PRINT,

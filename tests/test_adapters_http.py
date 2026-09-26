@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Final
@@ -29,6 +29,7 @@ from custom_components.generic_3dprinter.const import (
     ProtocolId,
 )
 from custom_components.generic_3dprinter.protocols import (
+    CommandBlockedError,
     AuthError,
     PrinterConfig,
     ProtocolError,
@@ -558,7 +559,8 @@ def test_unsupported_commands_never_reach_the_wire() -> None:
             with pytest.raises(UnsupportedCommandError):
                 await octoprint.async_send(Command.SET_FAN_SPEED, value=50.0, channel="chamber")
 
-            assert server.requests == []
+            # Reading the printer is allowed; sending it anything is not.
+            assert server.commands == []
 
     asyncio.run(case())
 
@@ -665,6 +667,32 @@ def test_uploads_carry_the_file_part_in_the_researched_shape() -> None:
 # -------------------------------------------------------------------- commands
 
 
+@contextmanager
+def _idle_printers() -> Iterator[None]:
+    """Make both recorded printers report that no job is running."""
+    stats = MOONRAKER_OBJECTS["status"]["print_stats"]
+    flags = OCTOPRINT_PRINTER["state"]["flags"]
+    saved = (stats["state"], OCTOPRINT_PRINTER["state"]["text"], flags["printing"], flags["ready"])
+    stats["state"] = "standby"
+    OCTOPRINT_PRINTER["state"]["text"] = "Operational"
+    flags["printing"], flags["ready"] = False, True
+    try:
+        yield
+    finally:
+        stats["state"], OCTOPRINT_PRINTER["state"]["text"], flags["printing"], flags["ready"] = saved
+
+
+def test_a_print_is_not_started_over_a_running_one() -> None:
+    async def case() -> None:
+        async with _server() as server, _session() as session:
+            for adapter in (_moonraker(server, session), _octoprint(server, session)):
+                with pytest.raises(CommandBlockedError, match="busy"):
+                    await adapter.async_send(Command.START_PRINT, filename="benchy.gcode")
+            assert server.commands == []
+
+    asyncio.run(case())
+
+
 def test_commands_reach_the_researched_endpoints() -> None:
     async def case() -> None:
         async with _server() as server, _session() as session:
@@ -679,7 +707,7 @@ def test_commands_reach_the_researched_endpoints() -> None:
             await octoprint.async_send(Command.START_PRINT, filename="local/cube.gcode")
             await octoprint.async_send(Command.DELETE_FILE, filename="local/cube.gcode")
 
-            assert server.requests == [
+            assert [item for item in server.requests if not item.startswith("GET ")] == [
                 "POST /printer/print/pause",
                 "POST /printer/gcode/script",
                 "POST /printer/print/start?filename=benchy.gcode",
@@ -696,7 +724,8 @@ def test_commands_reach_the_researched_endpoints() -> None:
             }
             assert server.commands[5]["body"] == {"command": "select", "print": True}
 
-    asyncio.run(case())
+    with _idle_printers():
+        asyncio.run(case())
 
 
 def test_moonraker_subscription_merges_pushed_updates() -> None:

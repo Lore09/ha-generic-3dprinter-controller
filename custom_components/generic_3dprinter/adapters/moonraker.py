@@ -402,7 +402,7 @@ class MoonrakerProtocol(Protocol):
             with suppress(aiohttp.ClientError, ConnectionResetError):
                 await socket.close()
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot from a single object query."""
         body = await self._async_read_json(f"/printer/objects/query?{'&'.join(OBJECTS)}")
         return self._snapshot(_status_mapping(body))

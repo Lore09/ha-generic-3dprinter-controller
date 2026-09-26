@@ -578,6 +578,7 @@ async def test_jog_is_relative_then_absolute(
 ) -> None:
     """A jog brackets the move in relative mode and restores absolute mode."""
     printer = FakePrinter()
+    printer.model["state"]["status"] = "idle"
     async with printer_server(printer) as base_url:
         await duet_adapter(duet_config(base_url), session).async_send(
             Command.JOG, axis=axis, distance=distance
@@ -826,6 +827,8 @@ async def test_command_scripts(
 ) -> None:
     """Every granted command leaves the socket as the script RRF expects."""
     printer = FakePrinter()
+    # Idle, so homing and starting a print are not refused as busy.
+    printer.model["state"]["status"] = "idle"
     async with printer_server(printer) as base_url:
         await duet_adapter(duet_config(base_url), session).async_send(command, **params)
     assert printer.gcode_lines == lines

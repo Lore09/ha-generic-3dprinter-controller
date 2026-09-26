@@ -692,7 +692,7 @@ class DuetProtocol(Protocol):
 
     # ---------------------------------------------------------------------- read
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot read from the object model."""
         answer = await self._async_request("GET", MODEL_PATH, query={"key": READ_KEY})
         if answer.status == 404:
