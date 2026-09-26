@@ -323,9 +323,14 @@ component. Entity names come from there, not from `strings.json`.
 ## Development
 
 ```bash
-python -m pytest tests/ -q     # 222 tests, about twenty seconds
-npm test                       # 46 card tests
+python -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+.venv/bin/python -m pytest -q  # the Python suite, about ten seconds
+npm install && npm test        # the card tests, Node 20 or newer
 ```
+
+`requirements-test.txt` pins the Home Assistant test harness, and through it the
+Home Assistant release the suite runs against.
 
 `tools/` holds the instruments used to work on the SDCP protocol and to prove the
 integration against real hardware:
