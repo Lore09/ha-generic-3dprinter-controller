@@ -120,6 +120,9 @@ class Capability(StrEnum):
     FILE_UPLOAD = "file_upload"
     FILE_DELETE = "file_delete"
     CAMERA = "camera"
+    #: The camera is a native video stream, such as H.264 over HTTP-FLV, which Home
+    #: Assistant plays itself. A printer declares this or ``CAMERA``, never both.
+    CAMERA_STREAM = "camera_stream"
     WEB_UI = "web_ui"
     #: The printer reports the slots of a multi-material unit, such as Elegoo's
     #: CANVAS, and what is loaded in each. A printer that can express this but has

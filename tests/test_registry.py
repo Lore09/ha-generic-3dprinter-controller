@@ -51,3 +51,15 @@ def test_model_profiles_are_subsets_with_unique_ids(registration: registry.Adapt
     assert len(ids) == len(set(ids))
     for profile in registration.models:
         assert profile.capabilities <= registration.capabilities, profile.id
+
+
+@pytest.mark.parametrize("registration", list(registry.ADAPTERS.values()), ids=lambda r: r.id.value)
+def test_a_camera_is_one_kind(registration: registry.AdapterRegistration) -> None:
+    """A camera is either relayed as MJPEG or played as a stream, never both."""
+    from custom_components.generic_3dprinter.const import Capability
+
+    both = {Capability.CAMERA, Capability.CAMERA_STREAM}
+    for capabilities in (registration.capabilities, *(p.capabilities for p in registration.models)):
+        if registration.models and capabilities is registration.capabilities:
+            continue
+        assert not both <= capabilities

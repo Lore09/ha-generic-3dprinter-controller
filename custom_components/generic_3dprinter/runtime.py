@@ -288,6 +288,30 @@ class PrinterRuntime:
         return Capability.CAMERA in self.adapter.capabilities
 
     @property
+    def has_stream(self) -> bool:
+        """Return ``True`` when this printer's camera is a stream Home Assistant plays."""
+        return Capability.CAMERA_STREAM in self.adapter.capabilities
+
+    @property
+    def camera_kind(self) -> str | None:
+        """Return ``"mjpeg"``, ``"stream"`` or ``None``, for the card."""
+        if self.has_stream:
+            return "stream"
+        if self.has_camera:
+            return "mjpeg"
+        return None
+
+    def camera_entity_id(self) -> str | None:
+        """Return the entity id of this printer's camera, once it is registered."""
+        from homeassistant.helpers import entity_registry as er
+
+        from .const import DOMAIN
+
+        return er.async_get(self.hass).async_get_entity_id(
+            "camera", DOMAIN, f"{self.entry_id}_camera"
+        )
+
+    @property
     def has_web_ui(self) -> bool:
         """Return ``True`` when this printer serves a web page worth proxying."""
         return Capability.WEB_UI in self.adapter.capabilities
@@ -337,7 +361,9 @@ class PrinterRuntime:
             "serial": self.snapshot.serial,
             "connected": self.snapshot.connected,
             "last_error": self.last_error,
-            "camera": self.has_camera,
+            "camera": self.camera_kind is not None,
+            "camera_kind": self.camera_kind,
+            "camera_entity_id": self.camera_entity_id() if self.camera_kind else None,
             "web_ui": self.has_web_ui,
             "camera_url": camera_url,
             "snapshot_url": snapshot_url,

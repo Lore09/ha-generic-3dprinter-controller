@@ -69,7 +69,7 @@ async def ws_list(
                     "model": runtime.snapshot.model,
                     "connected": runtime.snapshot.connected,
                     "print_state": runtime.snapshot.print_state.value,
-                    "camera": runtime.has_camera,
+                    "camera": runtime.camera_kind is not None,
                     # The state sensor's unique id is the entry id and its key,
                     # as every entity of this integration builds its own.
                     "entity_id": er.async_get(hass).async_get_entity_id(

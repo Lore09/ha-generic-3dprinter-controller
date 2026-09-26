@@ -572,6 +572,15 @@ class Protocol(ABC):
         """Upload one G-code file and return its stored entry."""
         raise NotImplementedError
 
+    async def async_stream_source(self) -> str:
+        """Start the printer's video stream if it needs starting, and return its URL.
+
+        Only for a printer with ``CAMERA_STREAM``. It may send the printer whatever
+        switches its camera on, so it is called when someone plays the stream, not
+        when the camera entity is created.
+        """
+        raise UnreachableError("this protocol has no video stream")
+
     async def async_camera_frame(self) -> bytes:
         """Return one complete JPEG frame.
 

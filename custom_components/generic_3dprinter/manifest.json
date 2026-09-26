@@ -1,6 +1,7 @@
 {
   "domain": "generic_3dprinter",
   "name": "Generic 3D Printer Controller",
+  "after_dependencies": ["ffmpeg", "stream"],
   "codeowners": ["@dnviti"],
   "config_flow": true,
   "dependencies": ["http", "websocket_api"],
