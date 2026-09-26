@@ -169,6 +169,7 @@ class Generic3DPrinterNumber(Generic3DPrinterEntity, NumberEntity):
         """Bind the entity to its coordinator and its description."""
         super().__init__(coordinator, description.key)
         self.entity_description = description
+        self._command = description.command
 
     @property
     def native_value(self) -> float | None:

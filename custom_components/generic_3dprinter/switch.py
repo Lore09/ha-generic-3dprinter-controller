@@ -71,6 +71,8 @@ async def async_setup_entry(
 class Generic3DPrinterSwitch(Generic3DPrinterEntity, SwitchEntity):
     """One switchable light on the printer."""
 
+    _command = Command.SET_LIGHT
+
     entity_description: Generic3DPrinterSwitchDescription
 
     def __init__(
@@ -103,6 +105,8 @@ class Generic3DPrinterSwitch(Generic3DPrinterEntity, SwitchEntity):
 
 class AutoRefillSwitch(Generic3DPrinterEntity, SwitchEntity):
     """Whether the multi-material unit switches to a matching slot when one runs out."""
+
+    _command = Command.SET_AUTO_REFILL
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
         """Bind the switch to the printer's multi-material system."""

@@ -294,3 +294,25 @@ async def test_a_centauri_carbon_2_entry(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert cc2_printer.registered == [], "the unload left the printer's client slot taken"
+
+
+async def test_a_blocked_control_says_why(
+    hass: HomeAssistant, cc2_printer: FakeCC2Printer
+) -> None:
+    """Mid-print, home stays available and carries the printer's reason; pause does not."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = cc2_entry(hass, cc2_printer)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+
+    def state_of(key: str):
+        entity_id = registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_{key}")
+        assert entity_id, key
+        return hass.states.get(entity_id)
+
+    home = state_of("home")
+    assert home.state != "unavailable"
+    assert home.attributes["blocked_reason"] == "the printer is not idle"
+    assert "blocked_reason" not in state_of("pause").attributes
