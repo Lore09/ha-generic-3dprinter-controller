@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+
+* **Controls say why they are refused.** A printer now reports the commands it
+  supports but will not take right now, with the reason, such as a Centauri Carbon
+  2 that moves its head only while idle. The card draws those controls disabled and
+  shows the reason; buttons, numbers and switches carry it as a `blocked_reason`
+  attribute for automations; and a refused command never reaches the printer. Every
+  printer refuses to move, start a print or change filament during a job, which the
+  card used to enforce on its own.
+* **Discovery finds every printer that answers.** When several do, the setup asks
+  which one to add, and printers already set up are not offered again. A printer
+  that reports a serial number is keyed by it, so a new address does not add it twice.
+* **Printers whose camera is a video stream** are played by Home Assistant, and the
+  card shows them with Home Assistant's own camera card. No printer uses this yet.
+* One protocol can now serve several printer models, each with the controls it
+  really has, and the card marks a model nobody has measured as unverified.
+* MQTT over TLS, for printers whose broker needs it.
+
+**Fixed**
+
+* A second connection attempt to a Centauri Carbon that was already connected
+  opened a second socket and kept one of the printer's five client slots until the
+  printer timed it out.
+* `tools/acceptance_cc2.py` failed to start, and `tools/acceptance_sdcp.py` crashed
+  on an unreachable printer.
+
+**Removed**
+
+* PrusaLink, which was listed but never installed and so never reached the menu.
+
+**Development**
+
+* `requirements-test.txt` pins the test harness. The card tests need Node 22.12.
+* Every adapter runs one shared contract suite against its fake printer.
+
 ## 0.5.0
 
 **Added**

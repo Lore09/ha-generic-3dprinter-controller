@@ -66,28 +66,60 @@ Consequences that follow, and that the card must respect:
 
 ## Capabilities are data
 
-Capabilities are a declared set on the adapter, not a property of the protocol
-name and not a pile of booleans on the entity.
+Capabilities are a declared set on the registration, not a property of the
+protocol name and not a pile of booleans on the entity. Every command maps to one
+capability (`protocols.COMMAND_CAPABILITY`), and an entity is created only when
+its capability is granted, so an unsupported command produces no entity rather
+than a button that fails when pressed. The card reads the same set, so a printer
+with no camera shows no camera pane and a printer that cannot pause shows no
+pause button.
 
-```python
-class Command(StrEnum):
-    START = "start"
-    PAUSE = "pause"
-    RESUME = "resume"
-    STOP = "stop"
-    SET_HOTEND_TEMP = "set_hotend_temp"
-    SET_BED_TEMP = "set_bed_temp"
-    SET_SPEED = "set_speed"
-    SET_FAN = "set_fan"
-    SET_LIGHT = "set_light"
-    HOME = "home"
-```
+Three refinements keep that rule true on real hardware.
 
-An adapter declares `frozenset[Command]`. The button entities are created from
-that set, so an unsupported command produces no entity rather than a button that
-fails when pressed. The card asks the coordinator for the capability set and
-renders only those controls, so a printer with no camera shows no camera pane and
-a printer that cannot pause shows no pause button.
+**Model profiles.** One protocol can serve several models that differ in what
+they have: the Anycubic Kobra line speaks one protocol, and only some of its
+models have a chamber. A registration lists `ModelProfile`s, the adapter records
+the model it reached during setup, and the granted set becomes the registration's,
+narrowed to the profile, less any opt-in not granted. Setup runs before entities
+are created, so they see the narrowed set. A model the registration does not know
+keeps the whole set and its snapshot says so; a profile nobody measured is marked
+unverified on the card.
+
+**State rules.** Some commands are supported but refused in some states: a
+Centauri Carbon 2 moves its head only while idle, and an Anycubic applies
+temperatures only during a print. An adapter declares `BlockRule`s, and the base
+class's `async_read` evaluates them into `snapshot.blocked`, a map from command to
+the reason a user reads. `async_send` refuses a blocked command before the
+adapter sees it; entities stay available and report `blocked_reason`; the card
+draws the control disabled with the reason. Every printer inherits one default
+rule: no motion, start or filament change while a job is running.
+
+**Camera kinds.** `CAMERA` is a JPEG camera the integration relays through one
+shared upstream connection. `CAMERA_STREAM` is a native video stream: the adapter
+returns its URL from `async_stream_source()`, Home Assistant's stream component
+plays it, and the card embeds Home Assistant's own camera card for it.
+
+## Finding printers
+
+Discovery never names a protocol outside `adapters/`. An adapter may implement
+two read-only class methods, `async_discover` to broadcast for its printers and
+`async_identify` to ask one host whether it is one. The engine in `discovery.py`
+asks every registration: a printer that identifies itself outranks a product name
+on a web page (each registration's `http_markers`), which outranks an open port
+(its `ports`). A result carries `prefill`, the configuration the printer gave
+about itself, such as its serial number. The config flow offers every printer
+found and not yet configured.
+
+## Holding adapters to one contract
+
+`tests/adapter_kit/` runs the same contract against every protocol's fake
+printer: setup and teardown are idempotent, a snapshot stays inside the model's
+units, a granted command reaches the wire while an absent, withheld or blocked one
+never does, identifying a printer sends it nothing, and a printer that went away
+is recovered. A protocol with no harness fails the suite. Printers that host
+their own MQTT broker share `fake_broker.py`, with TLS. `tools/acceptance_kit.py`
+is the same idea for real hardware: read-only by default, and `--active` asks
+before each command that changes the printer.
 
 ## Refusing what is dangerous
 
