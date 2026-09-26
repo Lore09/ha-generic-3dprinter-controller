@@ -42,3 +42,12 @@ def test_family_members_name_their_model(registration: registry.AdapterRegistrat
     if registration.family is not None:
         assert registration.family in registry.FAMILIES
         assert registration.model
+
+
+@pytest.mark.parametrize("registration", list(registry.ADAPTERS.values()), ids=lambda r: r.id.value)
+def test_model_profiles_are_subsets_with_unique_ids(registration: registry.AdapterRegistration) -> None:
+    """A profile may only narrow its protocol, and one id names one model."""
+    ids = [profile.id for profile in registration.models]
+    assert len(ids) == len(set(ids))
+    for profile in registration.models:
+        assert profile.capabilities <= registration.capabilities, profile.id

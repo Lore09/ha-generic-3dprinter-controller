@@ -31,6 +31,7 @@ from .const import (
     Capability,
     STATE_CHANGING_COMMANDS,
     Command,
+    ModelProfile,
     PrintState,
     ProtocolId,
     UnsafeFeature,
@@ -378,12 +379,19 @@ class Protocol(ABC):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
-        """Store the configuration, the shared HTTP session and the granted set."""
+        """Store the configuration, the shared HTTP session and the granted set.
+
+        ``granted`` is the registration's set after every opt-in gate; ``models``
+        narrows it further once the adapter reports which model it reached.
+        """
         self._config = config
         self._session = session
         self._granted = granted
         self._unsafe = unsafe
+        self._models = models
+        self._model_id: str | None = None
         self._last_snapshot: PrinterSnapshot | None = None
 
     @property
@@ -398,8 +406,32 @@ class Protocol(ABC):
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """Return the capabilities this printer grants, after every gate."""
-        return self._granted
+        """Return the capabilities this printer grants, after every gate.
+
+        Narrowed to the model's profile when the adapter has reported a model its
+        registration knows. An unknown model keeps the registration's whole set,
+        and the snapshot says the model is unknown.
+        """
+        profile = self.model_profile
+        if profile is None:
+            return self._granted
+        return self._granted & profile.capabilities
+
+    @property
+    def model_id(self) -> str | None:
+        """Return the model id the printer reported, if the adapter has one."""
+        return self._model_id
+
+    @property
+    def model_profile(self) -> ModelProfile | None:
+        """Return the profile of the model this adapter reached, if it is known."""
+        if self._model_id is None:
+            return None
+        return next((item for item in self._models if item.id == self._model_id), None)
+
+    def _set_model_id(self, model_id: str | None) -> None:
+        """Record which model the printer says it is. Called by an adapter in setup."""
+        self._model_id = model_id
 
     @property
     def unsafe_features(self) -> tuple[UnsafeFeature, ...]:
@@ -453,8 +485,12 @@ class Protocol(ABC):
         granted capabilities and the blocked commands, whatever the adapter built.
         """
         snapshot = await self._async_read()
-        capabilities = self.capabilities
-        snapshot = replace(snapshot, capabilities=capabilities)
+        snapshot = replace(snapshot, capabilities=self.capabilities)
+        profile = self.model_profile
+        if profile is not None:
+            snapshot = replace(snapshot, model=profile.name)
+        elif self._models and self._model_id is not None:
+            snapshot = replace(snapshot, errors=(*snapshot.errors, f"unknown model {self._model_id}"))
         snapshot = replace(snapshot, blocked=MappingProxyType(self._blocked(snapshot)))
         self._last_snapshot = snapshot
         return snapshot

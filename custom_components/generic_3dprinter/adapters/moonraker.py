@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 import aiohttp
 
-from ..const import Capability, Command, PrintState, ProtocolId, UnsafeFeature
+from ..const import Capability, Command, ModelProfile, PrintState, ProtocolId, UnsafeFeature
 from ..models import (
     Axis,
     Celsius,
@@ -312,9 +312,10 @@ class MoonrakerProtocol(Protocol):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
         """Create the adapter and the provenance cache it owns."""
-        super().__init__(config, session, granted=granted, unsafe=unsafe)
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._model: str | None = None
         self._serial: str | None = None
         self._socket: aiohttp.ClientWebSocketResponse | None = None

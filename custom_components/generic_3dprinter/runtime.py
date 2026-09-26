@@ -292,6 +292,13 @@ class PrinterRuntime:
         """Return ``True`` when this printer serves a web page worth proxying."""
         return Capability.WEB_UI in self.adapter.capabilities
 
+    def model_profile(self) -> dict[str, object] | None:
+        """Return which model profile applies, and whether it was measured."""
+        profile = self.adapter.model_profile
+        if profile is None:
+            return None
+        return {"id": profile.id, "name": profile.name, "verified": profile.verified}
+
     async def async_stop(self) -> None:
         """Stop background work owned by this runtime."""
         await self.camera.async_stop()
@@ -343,6 +350,7 @@ class PrinterRuntime:
                 for feature in self.adapter.unsafe_features
             ],
             "filament_presets": [dict(item) for item in self.adapter.filament_presets],
+            "model_profile": self.model_profile(),
             "printer": self.snapshot.as_dict(),
         }
 

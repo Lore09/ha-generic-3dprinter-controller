@@ -47,6 +47,7 @@ from typing import Any, Final
 import aiohttp
 
 from ..const import (
+    ModelProfile,
     Capability,
     Command,
     LightChannel,
@@ -344,9 +345,10 @@ class SdcpProtocol(Protocol):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
         """Create the adapter for one printer."""
-        super().__init__(config, session, granted=granted, unsafe=unsafe)
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reader: asyncio.Task[None] | None = None
         self._pending: dict[str, asyncio.Future[Mapping[str, Any]]] = {}

@@ -1472,6 +1472,7 @@ class PrinterView {
     const subtitle = [
       this.description.model || printer.model || this.description.protocol || printer.protocol,
       this.description.firmware ? `fw ${this.description.firmware}` : null,
+      this.description.model_profile && this.description.model_profile.verified === false ? "unverified model" : null,
     ]
       .filter(Boolean)
       .join(" · ");

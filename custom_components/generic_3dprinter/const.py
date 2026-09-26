@@ -219,3 +219,21 @@ class UnsafeFeature:
     gates: frozenset[Capability]
     evidence: str
 
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProfile:
+    """One printer model among several that speak the same protocol.
+
+    A registration with profiles grants, once the adapter knows which model it
+    reached, only what that model has: an open-frame printer has no chamber, and
+    a printer without a camera has no camera pane, although its protocol could
+    express both. ``verified`` says whether this project measured the model on
+    hardware, and the card says so when it did not.
+    """
+
+    id: str
+    name: str
+    capabilities: frozenset[Capability]
+    verified: bool = False
+    evidence: str = ""

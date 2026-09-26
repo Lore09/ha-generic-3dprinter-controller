@@ -54,7 +54,7 @@ from typing import Any, Final
 
 import aiohttp
 
-from ..const import Capability, Command, LightChannel, PrintState, ProtocolId, UnsafeFeature
+from ..const import Capability, Command, LightChannel, ModelProfile, PrintState, ProtocolId, UnsafeFeature
 from ..discovery import DiscoveryResult, async_discover_cc2
 from ..models import (
     Axis,
@@ -495,9 +495,10 @@ class ElegooCC2Protocol(Protocol):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
         """Create the adapter for one printer."""
-        super().__init__(config, session, granted=granted, unsafe=unsafe)
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._client: MqttClient | None = None
         self._heartbeat: asyncio.Task[None] | None = None
         self._serial = config.serial or ""

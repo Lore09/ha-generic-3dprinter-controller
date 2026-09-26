@@ -30,6 +30,8 @@ async def async_get_config_entry_diagnostics(
         "options": async_redact_data(dict(entry.options), TO_REDACT),
         "config": async_redact_data(runtime.config.as_dict(), TO_REDACT),
         "capabilities": sorted(item.value for item in runtime.capabilities),
+        "model_id": runtime.adapter.model_id,
+        "model_profile": runtime.model_profile(),
         "withheld_hazards": [
             {"id": feature.id, "label": feature.label, "evidence": feature.evidence}
             for feature in runtime.adapter.unsafe_features

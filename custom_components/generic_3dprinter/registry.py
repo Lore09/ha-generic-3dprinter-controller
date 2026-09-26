@@ -20,7 +20,7 @@ from typing import Any, Final
 
 import aiohttp
 
-from .const import Capability, ProtocolId, UnsafeFeature
+from .const import Capability, ModelProfile, ProtocolId, UnsafeFeature
 from .protocols import PrinterConfig, Protocol
 
 _LOGGER = logging.getLogger(__name__)
@@ -125,6 +125,9 @@ class AdapterRegistration:
     family: str | None = None
     #: The model name shown when the user picks within the family.
     model: str | None = None
+    #: The models this protocol serves, when they differ in what they have. Empty
+    #: means one model, whose capabilities are the registration's.
+    models: tuple[ModelProfile, ...] = ()
 
 
 def _resolve(module: Any, name: str) -> type[Protocol] | None:
@@ -441,6 +444,7 @@ def build_adapter(config: PrinterConfig, session: aiohttp.ClientSession) -> Prot
         session,
         granted=granted_capabilities(registration, config.unsafe_enabled),
         unsafe=withheld_features(registration, config.unsafe_enabled),
+        models=registration.models,
     )
 
 

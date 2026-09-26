@@ -302,6 +302,22 @@ test("renders the printer name, state and secondary line", async () => {
   assert.match(card.shadowRoot.querySelector(".subtitle").textContent, /V1\.4\.49/);
 });
 
+test("a model this project has not measured is marked as unverified", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Printer" }],
+    descriptions: {
+      entry1: description({ model: "Kobra 3", model_profile: { id: "20024", name: "Kobra 3", verified: false } }),
+    },
+  });
+  assert.match(card.shadowRoot.querySelector(".subtitle").textContent, /Kobra 3 · fw V1\.4\.49 · unverified model/);
+
+  const measured = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Printer" }],
+    descriptions: { entry1: description({ model_profile: { id: "1", name: "Centauri Carbon", verified: true } }) },
+  });
+  assert.doesNotMatch(measured.card.shadowRoot.querySelector(".subtitle").textContent, /unverified/);
+});
+
 test("shows progress, layers, times and temperatures", async () => {
   const { card } = await mountCard({
     printers: [{ entry_id: "entry1", name: "Centauri Carbon" }],

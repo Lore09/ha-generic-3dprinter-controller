@@ -33,7 +33,7 @@ from typing import Any, Final
 import aiohttp
 from yarl import URL
 
-from ..const import Capability, Command, PrintState, ProtocolId, UnsafeFeature
+from ..const import Capability, Command, ModelProfile, PrintState, ProtocolId, UnsafeFeature
 from ..models import (
     Axis,
     Celsius,
@@ -575,9 +575,10 @@ class DuetProtocol(Protocol):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
         """Create the adapter and take the password out of the credential mapping."""
-        super().__init__(config, session, granted=granted, unsafe=unsafe)
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._password = config.credentials.get("password")
         self._challenge: Mapping[str, str] | None = None
         self._session_key: str | None = None
