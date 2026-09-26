@@ -60,3 +60,26 @@ async def test_a_wildcard_subscriber_receives_and_a_bad_password_is_refused() ->
     finally:
         await broker.stop()
         broker.close()
+
+
+async def test_the_client_speaks_tls_to_a_self_signed_broker() -> None:
+    """A printer's own broker has a certificate nobody signed; the session is still encrypted."""
+    from custom_components.generic_3dprinter.mqtt_client import insecure_tls_context
+
+    async def on_publish(_session: BrokerSession, _topic: str, _payload: bytes) -> None:
+        return None
+
+    broker = FakeBroker(authenticate=lambda _s, _p: 0, on_publish=on_publish, tls=True)
+    await broker.start()
+    try:
+        client = MqttClient(lambda _t, _p: None)
+        await client.connect(
+            "127.0.0.1", broker.port, client_id="t", username="u", password="p", tls=insecure_tls_context()
+        )
+        assert not client.closed
+        assert client.peer_certificate_sha256 is not None
+        assert len(client.peer_certificate_sha256) == 64
+        await client.close()
+    finally:
+        await broker.stop()
+        broker.close()
