@@ -2,7 +2,7 @@
   "name": "Generic 3D Printer Controller",
   "content_in_root": false,
   "render_readme": true,
-  "homeassistant": "2024.6.0",
+  "homeassistant": "2025.1.0",
   "zip_release": false,
   "filename": "generic_3dprinter.zip"
 }
