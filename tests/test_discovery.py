@@ -118,3 +118,32 @@ async def test_a_printer_already_set_up_is_not_offered_again(hass: HomeAssistant
     result = await _discover(hass, [known, fresh])
     assert result["step_id"] == "details"
     assert result["description_placeholders"]["protocol"] == ADAPTERS[ProtocolId.SDCP_CC1].label
+
+
+async def _add_moonraker(hass: HomeAssistant, host: str, port: int) -> dict[str, Any]:
+    with patch("custom_components.generic_3dprinter.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"discover": False})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"protocol": "moonraker"})
+        return await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"name": f"Klipper {port}", "host": host, "port": port}
+        )
+
+
+async def test_one_host_can_run_a_printer_per_port(hass: HomeAssistant) -> None:
+    """One Raspberry Pi can run a Moonraker per printer, each on a port of its own."""
+    assert (await _add_moonraker(hass, "192.0.2.20", 7125))["type"] is FlowResultType.CREATE_ENTRY
+    assert (await _add_moonraker(hass, "192.0.2.20", 7126))["type"] is FlowResultType.CREATE_ENTRY
+    again = await _add_moonraker(hass, "192.0.2.20", 7126)
+    assert (again["type"], again["reason"]) == (FlowResultType.ABORT, "already_configured")
+
+
+async def test_an_entry_without_a_port_is_the_one_on_the_default_port(hass: HomeAssistant) -> None:
+    MockConfigEntry(
+        domain=DOMAIN,
+        data={"name": "old", "protocol": "moonraker", "host": "192.0.2.21"},
+        unique_id="moonraker:192.0.2.21:0",
+    ).add_to_hass(hass)
+    same = await _add_moonraker(hass, "192.0.2.21", 7125)
+    assert (same["type"], same["reason"]) == (FlowResultType.ABORT, "already_configured")
+    assert (await _add_moonraker(hass, "192.0.2.21", 7126))["type"] is FlowResultType.CREATE_ENTRY
