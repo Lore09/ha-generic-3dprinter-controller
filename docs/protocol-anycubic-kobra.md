@@ -97,8 +97,10 @@ spool is in it), `color` as RGB and `status` (5 loaded).
 Send `video` / `stopCapture`, wait a second, send `startCapture`; the answer carries
 the stream URL, per session on the newer firmware (`/live/<token>` on port 18088)
 and `/flv` on the S1 (1). The stream is HTTP-FLV with H.264, which Home Assistant's
-stream component plays. Starting the capture switches the light on, so the camera
-entity does not start it until someone watches.
+stream component plays. The sources report that starting the capture switches the
+light on, so the camera entity does not start it until someone watches. A Kobra X on
+2.0.1.9, measured during a print, kept its light off when the capture started and
+streamed on with the light switched off.
 
 ## Not supported, and why
 

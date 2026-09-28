@@ -261,8 +261,9 @@ recorded so far.
 
 Each video fires a `generic_3dprinter_timelapse` event with its `path`, its
 `media_content_id` and its number of `frames`, and the switch keeps the last one in
-its `last_video` attribute. On an Anycubic Kobra, taking a frame starts the camera,
-which also switches the printer's light on.
+its `last_video` attribute. The frames need light: a Kobra X keeps its light as it
+is when the camera starts, and streams with it off, so a print at night in a dark
+room makes a dark timelapse unless the light is switched on.
 
 ```yaml
 automation:

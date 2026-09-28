@@ -168,8 +168,8 @@ class Generic3DPrinterStreamCamera(Camera):
         """Skip Home Assistant's WebRTC probe, which would start the stream.
 
         The probe calls :meth:`stream_source` whenever the entity is added or a
-        provider registers, and starting a printer's camera is not free: on an
-        Anycubic Kobra it switches the light on. Playback falls back to HLS, which
+        provider registers, and starting a printer's camera is not free: some
+        Anycubic Kobras are reported to switch the light on. Playback falls back to HLS, which
         asks for the source only when someone actually watches.
         """
 

@@ -123,7 +123,7 @@ async def test_the_stream_camera_plays_the_adapters_source(
 async def test_the_webrtc_probe_does_not_start_the_camera(
     hass: HomeAssistant, adapter: StreamProtocol
 ) -> None:
-    """Starting the capture switches a Kobra's light on, so only playback may start it."""
+    """Starting the capture is reported to switch some Kobras' light on, so only playback may start it."""
     camera = _camera(_runtime(hass, adapter))
     await camera.async_refresh_providers(write_state=False)
     assert adapter.starts == 0
