@@ -161,8 +161,13 @@ Kobra 3 through custom firmware.
 
 ## The card
 
-The integration registers the card automatically, so there is no Lovelace resource
-to add. Put it on a dashboard:
+The integration adds the card to your dashboards' resources itself, as soon as it
+loads and whether or not a printer is on, and keeps that entry at the current
+version. It appears under Settings, Dashboards, Resources as
+`/generic_3dprinter/generic-3dprinter-card.js`; there is nothing to add by hand, and
+an entry added by hand earlier is taken over rather than duplicated. If your
+Lovelace resources are kept in YAML, the card is loaded as an extra module instead.
+Put it on a dashboard:
 
 ```yaml
 type: custom:generic-3dprinter-card
@@ -284,6 +289,13 @@ automation:
 ```
 
 ## Troubleshooting
+
+**The card shows "Configuration error".** Fixed in 0.5.1. Before that, the card was
+loaded alongside the frontend's own code instead of after it, and on some loads, most
+of them in the phone app, it registered itself where the dashboard does not look.
+After updating, reload the page once; in the phone app use Settings, Companion app,
+Debugging, Reset frontend cache. In a dashboard's edit mode the error card shows the
+real reason, which helps tell this apart from a mistake in the card's YAML.
 
 **The printer is unreachable.** Confirm the address and that Home Assistant can
 reach the printer's network. The integration reports the printer as offline rather

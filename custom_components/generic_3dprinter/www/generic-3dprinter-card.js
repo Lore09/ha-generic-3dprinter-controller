@@ -16,7 +16,7 @@
  * soon as the integration is installed.
  */
 
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.5.1";
 
 const WS_LIST = "generic_3dprinter/list";
 const WS_DESCRIBE = "generic_3dprinter/describe";
@@ -2058,6 +2058,10 @@ class Generic3DPrinterCard extends HTMLElement {
 
   setConfig(config) {
     const next = { ...(config || {}) };
+    // An empty YAML key, `jog_steps:`, arrives as null and means "not set".
+    for (const key of ["jog_steps", "temperature_presets"]) {
+      if (next[key] === null) delete next[key];
+    }
     if (next.jog_steps !== undefined) {
       const steps = Array.isArray(next.jog_steps) ? next.jog_steps.map(Number) : [];
       if (!steps.length || steps.some((step) => !(step > 0))) {
@@ -2290,8 +2294,15 @@ class Generic3DPrinterCard extends HTMLElement {
 
   _sync() {
     if (!this.shadowRoot) return;
-    this._draw();
-    this.refreshTip();
+    // A drawing error must not reach Home Assistant, which would replace the card with
+    // its error card for the rest of the page's life. It goes to the console instead,
+    // and the next reading draws again.
+    try {
+      this._draw();
+      this.refreshTip();
+    } catch (err) {
+      console.error("generic-3dprinter-card: drawing failed", err);
+    }
   }
 
   /** Keep the popup of a text cut short on its text after the DOM under it changed. */
@@ -2819,12 +2830,47 @@ class Generic3DPrinterCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get("generic-3dprinter-card")) {
-  customElements.define("generic-3dprinter-card", Generic3DPrinterCard);
-}
-if (!customElements.get("generic-3dprinter-card-editor")) {
-  customElements.define("generic-3dprinter-card-editor", Generic3DPrinterCardEditor);
-}
+// ------------------------------------------------------------ registration
+
+/*
+ * Home Assistant's frontend replaces `window.customElements` with a scoped-registry
+ * polyfill as it starts, and dashboards look cards up only in that registry. A copy
+ * of this module that runs before the swap, which happens when it is loaded as an
+ * extra module and wins the race against the frontend's own bundle, defines the
+ * card on the browser's registry, which Home Assistant never consults: the card
+ * then shows as "Configuration error" for the life of the page
+ * (home-assistant/frontend#52960). Who wins depends on caches and CPU speed.
+ *
+ * So the elements are defined on the registry present now and, once Home
+ * Assistant's root element exists, on the registry present then. The polyfill takes
+ * a class the browser already has, and defining it resolves the `whenDefined` a
+ * dashboard is waiting on, so a card already shown as an error rebuilds itself.
+ */
+const ELEMENTS = [
+  ["generic-3dprinter-card", Generic3DPrinterCard],
+  ["generic-3dprinter-card-editor", Generic3DPrinterCardEditor],
+];
+
+const defineElements = () => {
+  const registry = window.customElements;
+  for (const [name, element] of ELEMENTS) {
+    if (registry.get(name)) continue;
+    try {
+      registry.define(name, element);
+    } catch (err) {
+      console.warn(`generic-3dprinter-card: could not define ${name}`, err);
+    }
+  }
+};
+
+const registryAtLoad = window.customElements;
+defineElements();
+const defineOnSwappedRegistry = () => {
+  if (window.customElements !== registryAtLoad) defineElements();
+};
+registryAtLoad.whenDefined("home-assistant").then(defineOnSwappedRegistry);
+// In case the root element was defined somewhere the browser's registry cannot see.
+for (const delay of [1000, 5000, 15000]) window.setTimeout(defineOnSwappedRegistry, delay);
 
 window.customCards = window.customCards || [];
 if (!window.customCards.some((card) => card.type === "generic-3dprinter-card")) {

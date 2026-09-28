@@ -45,6 +45,45 @@
 * `requirements-test.txt` pins the test harness. The card tests need Node 22.12.
 * Every adapter runs one shared contract suite against its fake printer.
 
+## 0.5.1
+
+**Fixed**
+
+* **The card showed "Configuration error" on some page loads, and on nearly every
+  load in the phone app.** Home Assistant's frontend replaces the browser's
+  custom-element registry with one of its own as it starts, and dashboards look
+  cards up only there. The card was loaded as an extra module, in parallel with the
+  frontend's own code, and when it ran first it registered itself in the browser's
+  registry, where the dashboard never looks; the error then stayed until the page
+  was reloaded. Which one ran first depended on caches and CPU speed, which is why a
+  hard reload helped, F5 sometimes did not, and a phone almost never recovered. This
+  is Home Assistant frontend issue #52960. Reproduced in a real Home Assistant
+  2026.9.4 by holding back the frontend's bundle: the old card failed 17 loads out of
+  17, the new one none.
+  * The card is now a Lovelace resource, which the dashboard loads itself once the
+    frontend has started. The integration adds it, keeps it at the current version,
+    takes over one added by hand instead of duplicating it, and removes it with the
+    last printer. With Lovelace resources kept in YAML it still loads as an extra
+    module.
+  * The card also registers itself again in the frontend's registry once that
+    exists, so it recovers even when it does run first.
+* **A printer that was off when Home Assistant started left the dashboard without
+  the card**, and the card without its data, until a printer answered: both were
+  registered only after the first printer had. They are now registered as soon as
+  the integration loads.
+* **A printer switched off at its plug when Home Assistant started was missing from
+  the card**, so the card could not offer the power button that switches it on. It
+  is now listed as not answering, with its power button and no other control, until
+  it answers.
+* An empty `jog_steps:` or `temperature_presets:` in the card's YAML is treated as
+  not set instead of breaking the card, and a drawing error goes to the browser's
+  console instead of turning the card into an error card.
+
+**Notes**
+
+* HACS now offers the integration from Home Assistant 2025.1, the oldest version its
+  tests run on. It declared 2024.6, where it could not load.
+
 ## 0.5.0
 
 **Added**

@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import test, { after } from "node:test";
+import test, { after, afterEach } from "node:test";
 
 import { JSDOM } from "jsdom";
 
@@ -22,6 +22,20 @@ import { JSDOM } from "jsdom";
  * alive forever. Every mounted card is torn down at the end of the run, and the
  * process is then ended explicitly so a stray timer cannot hang CI. */
 const mounted = [];
+
+/* The card catches a drawing error and reports it on the console, so that a bug
+ * never turns it into Home Assistant's error card. In the suite that would hide a
+ * broken card behind an empty one, so any such report fails the test that caused
+ * it, unless the test reads and clears it itself. */
+const DRAWING_FAILED = "generic-3dprinter-card: drawing failed";
+const drawingErrors = [];
+
+afterEach(() => {
+  const found = drawingErrors.splice(0);
+  if (found.length) {
+    throw new Error(`the card failed to draw: ${found.map((args) => String(args[1])).join("; ")}`);
+  }
+});
 
 after(() => {
   for (const { card, dom } of mounted) {
@@ -184,6 +198,12 @@ async function mountCard({
   global.Option = window.Option;
   global.setInterval = window.setInterval.bind(window);
   global.clearInterval = window.clearInterval.bind(window);
+
+  const consoleError = window.console.error.bind(window.console);
+  window.console.error = (...args) => {
+    if (String(args[0]).startsWith(DRAWING_FAILED)) drawingErrors.push(args);
+    else consoleError(...args);
+  };
 
   const confirmations = [];
   window.confirm = (message) => {
@@ -1421,6 +1441,125 @@ test("a configured printer is shown instead of the first one", async () => {
     config: { entry_id: "entry2" },
   });
   assert.deepEqual(texts(card, ".name"), ["Second"]);
+});
+
+// ------------------------------------------------------------ registration
+
+/**
+ * A stand-in for the scoped-registry polyfill Home Assistant's frontend installs as
+ * it starts: a registry of its own that knows only what is defined on it.
+ */
+function fakePolyfillRegistry() {
+  const definitions = new Map();
+  return {
+    definitions,
+    get: (name) => definitions.get(name),
+    define: (name, element) => {
+      if (definitions.has(name)) throw new Error(`${name} is already defined`);
+      definitions.set(name, element);
+    },
+    whenDefined: async () => undefined,
+  };
+}
+
+function bareWindow() {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    runScripts: "outside-only",
+    pretendToBeVisual: true,
+  });
+  mounted.push({ card: { remove() {} }, dom });
+  return dom.window;
+}
+
+test("a card loaded before Home Assistant swaps its registry is defined on the new one too", async () => {
+  // home-assistant/frontend#52960: the card ran first, was defined on the browser's
+  // registry, and the dashboard, which looks only in the polyfill's, showed
+  // "Configuration error" for the life of the page.
+  const window = bareWindow();
+  const native = window.customElements;
+  window.eval(readFileSync(CARD_PATH, "utf8"));
+  const card = native.get("generic-3dprinter-card");
+  assert.ok(card, "the card is defined where it loaded");
+
+  const polyfill = fakePolyfillRegistry();
+  Object.defineProperty(window, "customElements", { value: polyfill, configurable: true, writable: true });
+  // The polyfill defines Home Assistant's root element on the browser's registry as well.
+  native.define("home-assistant", class extends window.HTMLElement {});
+  await tick();
+
+  assert.equal(polyfill.get("generic-3dprinter-card"), card);
+  assert.equal(polyfill.get("generic-3dprinter-card-editor"), native.get("generic-3dprinter-card-editor"));
+});
+
+test("a card loaded after the swap is defined once, on the registry Home Assistant uses", async () => {
+  const window = bareWindow();
+  const polyfill = fakePolyfillRegistry();
+  Object.defineProperty(window, "customElements", { value: polyfill, configurable: true, writable: true });
+  window.eval(readFileSync(CARD_PATH, "utf8"));
+  await tick();
+  assert.ok(polyfill.get("generic-3dprinter-card"));
+  assert.deepEqual([...polyfill.definitions.keys()], ["generic-3dprinter-card", "generic-3dprinter-card-editor"]);
+});
+
+test("a printer switched off since Home Assistant started still offers its power button", async () => {
+  // What the backend answers for a printer it is still retrying.
+  const notAnswering = {
+    entry_id: "entry1",
+    name: "Centauri Carbon",
+    protocol: "sdcp_cc1",
+    connected: false,
+    last_error: "the printer has not answered since Home Assistant started",
+    camera: false,
+    camera_url: null,
+    snapshot_url: null,
+    camera_stats: null,
+    unsafe_features: [],
+    filament_presets: [],
+    printer: { protocol: "sdcp_cc1", connected: false, print_state: "unknown", capabilities: [], errors: [] },
+  };
+  const { card, services, confirmations } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Centauri Carbon", connected: false }],
+    descriptions: { entry1: notAnswering },
+    config: { power_entity: "switch.plug" },
+    states: { "switch.plug": { entity_id: "switch.plug", state: "off" } },
+  });
+  assert.deepEqual(texts(card, ".name"), ["Centauri Carbon"]);
+  const power = card.shadowRoot.querySelector(".power-toggle");
+  assert.ok(visible(power), "the power button must be there to switch the printer on");
+  assert.equal(power.disabled, false);
+  power.click();
+  await tick();
+  assert.deepEqual(confirmations, [], "switching on does not ask");
+  assert.deepEqual(services, [{ domain: "homeassistant", service: "turn_on", data: { entity_id: "switch.plug" } }]);
+  assert.deepEqual(all(card, "[data-command]"), [], "no printer controls while it is not there");
+});
+
+test("an empty YAML key is treated as not set rather than refused", async () => {
+  const { card } = await mountCard({ printers: [], descriptions: {} });
+  assert.doesNotThrow(() => card.setConfig({ jog_steps: null, temperature_presets: null }));
+});
+
+test("a drawing error goes to the console instead of breaking the card", async () => {
+  const { card, hass } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: idleCc2() },
+    config: { power_entity: "switch.plug" },
+    states: { "switch.plug": { entity_id: "switch.plug", state: "on" } },
+  });
+  card._draw = () => {
+    throw new Error("boom");
+  };
+
+  // The hass setter, which Home Assistant calls on every state change: a changed
+  // power entity redraws.
+  assert.doesNotThrow(() => {
+    card.hass = { ...hass, states: { "switch.plug": { entity_id: "switch.plug", state: "off" } } };
+  });
+  assert.equal(drawingErrors.splice(0).length, 1, "the hass setter did not draw, or drew twice");
+
+  // setConfig, which Home Assistant calls when the card is created or edited.
+  assert.doesNotThrow(() => card.setConfig({ power_entity: "switch.plug" }));
+  assert.equal(drawingErrors.splice(0).length, 1);
 });
 
 // ------------------------------------------------------------------ config
