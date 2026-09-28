@@ -134,10 +134,13 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
         id="20030",
         name="Anycubic Kobra X",
         capabilities=_KOBRA_BASE | {Capability.HOME, Capability.JOG},
+        verified=True,
         evidence=(
-            "handshake, reports and built-in unit from chrisfore/anycubic_ha_local's "
-            "Kobra X diagnostics; tempature/set, fan/setSpeed, light type 3 and "
-            "axis/move from stribor/anycubic_kobrax, written by a Kobra X owner"
+            "measured on a Kobra X, firmware 2.0.1.9, with tools/acceptance_kobra.py: "
+            "handshake, reports, the built-in unit, the paged file list, the camera, "
+            "the light, a nozzle target, the part fan, home and jog. Printing, pause, "
+            "resume, stop, speed and auto-feed follow chrisfore/anycubic_ha_local and "
+            "stribor/anycubic_kobrax, not yet measured"
         ),
     ),
     ModelProfile(id="20024", name="Anycubic Kobra 3", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),

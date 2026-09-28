@@ -128,9 +128,12 @@ sending them. The Kobra X's built-in four-colour changer, and any ACE, appear as
 multi-material unit with auto-feed. The camera is a video stream Home Assistant
 plays. Files can be listed and printed, but not uploaded yet.
 
-**No Kobra has been checked against this integration yet.** It is built from the
-published work of other projects, listed in `docs/protocol-anycubic-kobra.md`, and
-the card marks the model as unverified. `tools/acceptance_kobra.py` checks a printer.
+**The Kobra X has been checked on a real printer**, firmware 2.0.1.9: status, the
+colour changer, files, the camera, the light, temperatures, the fan, home and jog.
+Starting, pausing and stopping a print, the speed and auto-feed are not measured
+yet. The other Kobras are built from the published work of other projects, listed
+in `docs/protocol-anycubic-kobra.md`, and the card marks them as unverified.
+`tools/acceptance_kobra.py` checks a printer.
 
 ### The one dangerous setting
 

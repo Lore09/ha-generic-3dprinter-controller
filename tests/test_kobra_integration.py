@@ -66,5 +66,5 @@ async def test_a_kobra_x_entry(hass: HomeAssistant, hass_ws_client, printer: Fak
     assert described["camera_kind"] == "stream"
     assert described["camera_url"] is None
     assert described["camera_entity_id"] == camera.entity_id
-    assert described["model_profile"] == {"id": "20030", "name": "Anycubic Kobra X", "verified": False}
+    assert described["model_profile"] == {"id": "20030", "name": "Anycubic Kobra X", "verified": True}
     assert described["printer"]["filament"]["units"][0]["name"] == "Multi-colour unit"

@@ -125,8 +125,26 @@ Wireshark with **Follow → HTTP Stream**. The request line, the headers and the
 start of the body are what the adapter needs. The capture contains the upload
 token in the URL, which is issued per session.
 
+## Measured on a Kobra X
+
+Firmware 2.0.1.9, model id 20030, with `tools/acceptance_kobra.py`:
+
+* `/info`, the signed handshake and the TLS broker on 9883 work as described. The
+  serial (`cn`) has dashes, `F757-6C30-088E-57CA`.
+* `listLocal` needs `page_num` and `page_size` next to `path`. Without them the
+  printer answers `code: 10112` with `state: "failed"`, under a msgid of its own
+  rather than the request's. With them it lists every entry whatever the page asks
+  for, as `data.records` of `filename`, `size`, `is_dir` and a `timestamp` in
+  milliseconds. The built-in files are a folder, `test_model`.
+* While it homes or moves, `info.state` is `busy` with `project: null` for a few
+  seconds, and the printer refuses the next move until it is `free` again.
+* The camera serves H.264 1280×720 FLV at `urls.rtspUrl`, to two readers at once.
+* The light (type 3), a nozzle target, the part fan, home X/Y and a 10 mm jog of X
+  were accepted and show in the next read, while idle.
+
 ## Still to verify
 
-Everything. `tools/acceptance_kobra.py <host>` reads a printer without changing it;
+Starting, pausing, resuming and stopping a print, the speed and auto-feed on the
+Kobra X, and every other model. `tools/acceptance_kobra.py <host>` reads a printer without changing it;
 `--camera out.flv` checks the stream; `--active` sends the light, a nozzle target,
 the part fan and, on a Kobra X, a home and a jog, each confirmed first.
