@@ -70,6 +70,14 @@ _CREDENTIAL_LABELS = {
 }
 
 
+def _port_or(value: Any, default: int) -> int:
+    """Return a stored port as a number, or ``default`` when none was entered."""
+    try:
+        return int(value) or default
+    except (TypeError, ValueError):
+        return default
+
+
 class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the setup of one printer."""
 
@@ -170,19 +178,27 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._data[key] = value
         return await self.async_step_details()
 
-    def _already_configured(self, protocol: ProtocolId, host: str, serial: Any = None) -> bool:
+    def _already_configured(
+        self, protocol: ProtocolId, host: str, serial: Any = None, port: int | None = None
+    ) -> bool:
         """Return ``True`` when an entry already drives this printer.
 
         Matched on the serial number where both sides know it, so a printer whose
-        address changed is still recognised, and on the address otherwise.
+        address changed is still recognised, and on the address otherwise. A known
+        ``port`` must match too: one host can run several Moonraker or OctoPrint
+        instances, one printer each. ``None`` means the port is not known yet, as
+        in discovery, and any port on the address matches.
         """
+        default = next(iter(get_registration(protocol).ports), 0)
         for entry in self._async_current_entries(include_ignore=False):
             data = {**entry.data, **entry.options}
             if data.get(CONF_PROTOCOL) != protocol.value:
                 continue
             if serial and data.get(CONF_SERIAL) == serial:
                 return True
-            if data.get(CONF_HOST) == host:
+            if data.get(CONF_HOST) != host:
+                continue
+            if port is None or _port_or(data.get(CONF_PORT), default) == port:
                 return True
         return False
 
@@ -279,7 +295,8 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
                     else f"{config.protocol.value}:{config.host}:{config.port or 0}"
                 )
                 self._abort_if_unique_id_configured()
-                if self._already_configured(config.protocol, config.host, config.serial):
+                port = config.port or next(iter(registration.ports), 0)
+                if self._already_configured(config.protocol, config.host, config.serial, port):
                     return self.async_abort(reason="already_configured")
                 self._data = config.as_dict(include_secrets=True)
                 if registration.unsafe:
