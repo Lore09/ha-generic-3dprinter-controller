@@ -234,6 +234,9 @@
       },
       "timelapse": {
         "name": "Timelapse"
+      },
+      "timelapse_light": {
+        "name": "Timelapse light"
       }
     },
     "camera": {

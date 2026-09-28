@@ -50,7 +50,7 @@ async def test_a_kobra_x_entry(hass: HomeAssistant, hass_ws_client, printer: Fak
 
     registry = er.async_get(hass)
     ids = {item.unique_id.removeprefix(f"{entry.entry_id}_") for item in er.async_entries_for_config_entry(registry, entry.entry_id)}
-    assert {"camera", "pause", "home", "auto_refill", "timelapse"} <= ids
+    assert {"camera", "pause", "home", "auto_refill", "timelapse", "timelapse_light"} <= ids
     assert "chamber_temperature" not in ids
 
     camera = hass.states.get(registry.async_get_entity_id("camera", DOMAIN, f"{entry.entry_id}_camera"))

@@ -7,7 +7,8 @@
 * **A timelapse of every print**, for any printer with a camera. A Timelapse switch
   records a frame per layer, or every 30 seconds without layers, and turns them into
   an MP4 in the media folder when the job ends, with a `generic_3dprinter_timelapse`
-  event pointing at it. A still from a stream camera now reuses the running stream
+  event pointing at it. A Timelapse light switch lights a job that starts in the
+  dark and switches the light off again after. A still from a stream camera now reuses the running stream
   instead of restarting the printer's capture, which cut off whoever was watching.
 * **The Anycubic Kobra 3, Kobra 4, Kobra S1 and Kobra X**, in LAN mode, added with
   their address alone. Status, temperatures, fans, speed, the light, pause, resume

@@ -12,15 +12,21 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import async_capture_events
 
 from custom_components.generic_3dprinter import timelapse as timelapse_module
-from custom_components.generic_3dprinter.const import PrintState, ProtocolId
+from custom_components.generic_3dprinter.const import LightChannel, PrintState, ProtocolId
 from custom_components.generic_3dprinter.models import PrinterSnapshot
 from custom_components.generic_3dprinter.timelapse import EVENT_TIMELAPSE, Timelapse
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
 
 
-def _snapshot(state: PrintState, layer: int | None = None) -> PrinterSnapshot:
-    return PrinterSnapshot(protocol=ProtocolId.ANYCUBIC_KOBRA, connected=True, print_state=state, current_layer=layer)
+def _snapshot(state: PrintState, layer: int | None = None, *, lit: bool = False) -> PrinterSnapshot:
+    return PrinterSnapshot(
+        protocol=ProtocolId.ANYCUBIC_KOBRA,
+        connected=True,
+        print_state=state,
+        current_layer=layer,
+        lights=frozenset({LightChannel.CHAMBER}) if lit else frozenset(),
+    )
 
 
 @pytest.fixture(name="jpeg", scope="module")
@@ -112,3 +118,44 @@ async def test_a_camera_that_fails_skips_the_frame(hass: HomeAssistant, timelaps
     monkeypatch.setattr(timelapse_module, "async_get_image", broken)
     await _feed(hass, timelapse, _snapshot(PrintState.PRINTING, 1))
     assert (timelapse.recording, timelapse.frames) == (True, 0)
+
+
+@pytest.fixture(name="light")
+def light_fixture(timelapse: Timelapse, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record the light commands, and the frame count each one was sent at."""
+    monkeypatch.setattr(timelapse_module, "LIGHT_SETTLE", 0)
+    sent: list[object] = []
+
+    async def set_light(on: bool) -> None:
+        sent.append((on, timelapse.frames))
+
+    timelapse.set_light = set_light
+    timelapse.with_light = True
+    return sent
+
+
+async def test_a_job_started_in_the_dark_is_lit_for_its_frames(hass: HomeAssistant, timelapse: Timelapse, light: list) -> None:
+    await _feed(hass, timelapse, _snapshot(PrintState.PRINTING, 1), _snapshot(PrintState.PRINTING, 2, lit=True))
+    assert light == [(True, 0)], "the light goes on before the first frame"
+    await timelapse.async_finish()
+    assert light == [(True, 0), (False, 0)]
+
+
+async def test_a_light_already_on_is_left_alone(hass: HomeAssistant, timelapse: Timelapse, light: list) -> None:
+    await _feed(hass, timelapse, _snapshot(PrintState.PRINTING, 1, lit=True), _snapshot(PrintState.PRINTING, 2, lit=True))
+    await timelapse.async_finish()
+    assert light == []
+
+
+async def test_a_refused_light_still_records(hass: HomeAssistant, timelapse: Timelapse, light: list) -> None:
+    from homeassistant.exceptions import HomeAssistantError
+
+    async def refused(on: bool) -> None:
+        light.append(on)
+        raise HomeAssistantError("refused")
+
+    timelapse.set_light = refused
+    await _feed(hass, timelapse, _snapshot(PrintState.PRINTING, 1))
+    assert timelapse.frames == 1
+    await timelapse.async_finish()
+    assert light == [True], "a light that never went on is not switched off"

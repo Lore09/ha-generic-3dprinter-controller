@@ -27,7 +27,7 @@ from .entity import (
     granted_capabilities,
 )
 from .models import FilamentSystem
-from .timelapse import TimelapseSwitch
+from .timelapse import TimelapseLightSwitch, TimelapseSwitch
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -60,7 +60,10 @@ async def async_setup_entry(
             for description in SWITCH_DESCRIPTIONS
         )
     if entry.runtime_data.camera_kind is not None:
-        async_add_entities([TimelapseSwitch(coordinator)])
+        timelapse = TimelapseSwitch(coordinator)
+        async_add_entities([timelapse])
+        if granted[Capability.SET_LIGHT]:
+            async_add_entities([TimelapseLightSwitch(coordinator, timelapse.timelapse)])
     if granted[Capability.SET_AUTO_REFILL]:
 
         def build(filament: FilamentSystem) -> FilamentEntityFactories:

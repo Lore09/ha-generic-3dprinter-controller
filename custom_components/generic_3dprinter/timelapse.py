@@ -17,7 +17,7 @@ import asyncio
 import logging
 import shutil
 from time import monotonic
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -30,7 +30,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import slugify
 
-from .const import DOMAIN, PrintState
+from .const import DOMAIN, Command, LightChannel, PrintState
 from .coordinator import PrinterCoordinator
 from .entity import Generic3DPrinterEntity
 from .models import PrinterSnapshot
@@ -45,6 +45,8 @@ FRAME_RATE: Final = 30
 #: A job with fewer frames than this, such as one cancelled while heating, leaves
 #: no video behind.
 MIN_FRAMES: Final = 2
+#: Seconds the camera is given to settle after the light is switched on for a job.
+LIGHT_SETTLE: Final = 2.0
 #: States that end a job. Paused, preparing and unknown do not: a print that pauses
 #: for a filament change, or a printer that drops off the network for a poll, goes
 #: on in the same timelapse.
@@ -69,14 +71,26 @@ def media_dir(hass: HomeAssistant) -> Path:
 class Timelapse:
     """The frames of one printer's current job, and the video they become."""
 
-    def __init__(self, hass: HomeAssistant, name: str, camera: Callable[[], str | None]) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        name: str,
+        camera: Callable[[], str | None],
+        set_light: Callable[[bool], Awaitable[None]] | None = None,
+    ) -> None:
         """Record from the camera entity ``camera`` names, into a folder named after the printer.
 
         The entity id is asked for at each frame: the camera platform may register
-        its entity after this one is made.
+        its entity after this one is made. ``set_light`` switches the printer's light,
+        for :attr:`with_light`.
         """
         self.hass = hass
         self.camera = camera
+        self.set_light = set_light
+        #: Switch the light on for a job that starts with it off, and off again after.
+        self.with_light = False
+        self._needs_light = False
+        self._lit = False
         self.slug = slugify(name)
         self.frames = 0
         self.last_video: Path | None = None
@@ -104,6 +118,9 @@ class Timelapse:
                 folder = media_dir(self.hass) / DOMAIN / self.slug
                 self._job = folder / datetime.now().strftime("%Y%m%d-%H%M%S")
                 self.frames = 0
+                self._needs_light = (
+                    self.with_light and self.set_light is not None and LightChannel.CHAMBER not in snapshot.lights
+                )
                 due = True
             if due and not self._lock.locked():
                 self._last_layer, self._last_at = layer, monotonic()
@@ -117,6 +134,11 @@ class Timelapse:
             job, camera = self._job, self.camera()
             if job is None or camera is None:
                 return
+            if self._needs_light:
+                self._needs_light = False
+                self._lit = await self._async_light(True)
+                if self._lit:
+                    await asyncio.sleep(LIGHT_SETTLE)
             try:
                 image = await async_get_image(self.hass, camera)
             except HomeAssistantError as err:
@@ -131,6 +153,9 @@ class Timelapse:
         async with self._lock:
             job, frames = self._job, self.frames
             self._job, self._last_layer, self.frames = None, None, 0
+            if self._lit:
+                self._lit = False
+                await self._async_light(False)
             if job is None:
                 return None
             if frames < MIN_FRAMES:
@@ -152,6 +177,17 @@ class Timelapse:
             },
         )
         return video
+
+    async def _async_light(self, on: bool) -> bool:
+        """Switch the light, and return whether the printer took it."""
+        if self.set_light is None:
+            return False
+        try:
+            await self.set_light(on)
+        except HomeAssistantError as err:
+            _LOGGER.warning("the timelapse could not switch the light %s: %s", "on" if on else "off", err)
+            return False
+        return True
 
     def media_content_id(self, video: Path) -> str:
         """Return the media-source id the media browser and a notification use."""
@@ -195,7 +231,11 @@ class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
         super().__init__(coordinator, "timelapse")
         self.entity_description = SwitchEntityDescription(key="timelapse", icon="mdi:timelapse")
         runtime = coordinator.runtime
-        self.timelapse = Timelapse(coordinator.hass, runtime.config.name, runtime.camera_entity_id)
+
+        async def set_light(on: bool) -> None:
+            await coordinator.async_send_command(Command.SET_LIGHT, on=on, channel=LightChannel.CHAMBER.value)
+
+        self.timelapse = Timelapse(coordinator.hass, runtime.config.name, runtime.camera_entity_id, set_light)
         self._attr_is_on = False
 
     async def async_added_to_hass(self) -> None:
@@ -236,4 +276,46 @@ class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
         self._attr_is_on = False
         self.async_write_ha_state()
         await self.timelapse.async_finish()
+        self.async_write_ha_state()
+
+
+class TimelapseLightSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
+    """Whether a timelapse switches the light on for a job that starts in the dark.
+
+    A job that starts with the light off gets it switched on before its first frame
+    and off again when its video is made. A light already on is left alone.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: PrinterCoordinator, timelapse: Timelapse) -> None:
+        """Set the option on the printer's timelapse."""
+        super().__init__(coordinator, "timelapse_light")
+        self.entity_description = SwitchEntityDescription(key="timelapse_light", icon="mdi:lightbulb-auto")
+        self.timelapse = timelapse
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the option as it was left."""
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            self.timelapse.with_light = last.state == "on"
+
+    @property
+    def available(self) -> bool:
+        """A setting stays available while the printer is off."""
+        return True
+
+    @property
+    def is_on(self) -> bool:
+        """Return whether the option is set."""
+        return self.timelapse.with_light
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Light the next job that starts in the dark."""
+        self.timelapse.with_light = True
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        """Leave the light alone."""
+        self.timelapse.with_light = False
         self.async_write_ha_state()
