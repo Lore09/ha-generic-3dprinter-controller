@@ -129,6 +129,24 @@ async def test_the_webrtc_probe_does_not_start_the_camera(
     assert adapter.starts == 0
 
 
+async def test_a_stream_camera_sets_up_ffmpeg_and_is_added_without_it(
+    hass: HomeAssistant, adapter: StreamProtocol
+) -> None:
+    """Nothing else is sure to set ffmpeg up, and every still needs it; playback does not."""
+    from custom_components.generic_3dprinter import camera as camera_module
+
+    runtime = _runtime(hass, adapter)
+    runtime.entry.runtime_data = runtime
+    coordinator = SimpleNamespace(runtime=runtime, config_entry=runtime.entry, last_update_success=True)
+    added: list[Any] = []
+    with patch.object(camera_module, "async_setup_component", AsyncMock(return_value=False)) as setup, patch.object(
+        camera_module, "async_require_coordinator", return_value=coordinator
+    ):
+        await camera_module.async_setup_entry(hass, runtime.entry, added.extend)
+    setup.assert_awaited_once_with(hass, "ffmpeg", {})
+    assert [type(entity) for entity in added] == [Generic3DPrinterStreamCamera]
+
+
 async def test_a_still_comes_from_ffmpeg_and_a_failure_is_no_still(
     hass: HomeAssistant, adapter: StreamProtocol
 ) -> None:

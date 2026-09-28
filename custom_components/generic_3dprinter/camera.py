@@ -25,6 +25,7 @@ from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.setup import async_setup_component
 
 from .coordinator import PrinterCoordinator
 from .entity import async_device_info, async_require_coordinator
@@ -59,6 +60,23 @@ async def async_still_from_stream(
     return await ffmpeg.async_get_image(hass, command, width=width, height=height)
 
 
+async def async_require_ffmpeg(hass: HomeAssistant, name: str) -> None:
+    """Set up Home Assistant's ffmpeg, which a stream camera's stills come from.
+
+    ``after_dependencies`` only orders this integration after an ffmpeg the user
+    configured. Neither ``default_config`` nor the camera and stream components set
+    it up, so on an install where no other integration needs it every still, and
+    every timelapse frame, would fail. Playback does not need it, so a failure is
+    logged and the camera is still added.
+    """
+    if not await async_setup_component(hass, "ffmpeg", {}):
+        _LOGGER.warning(
+            "%s: Home Assistant's ffmpeg integration could not be set up, so this "
+            "camera gives no stills and no timelapse frames",
+            name,
+        )
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -67,6 +85,7 @@ async def async_setup_entry(
     """Create the camera entity when the printer has a camera."""
     runtime: PrinterRuntime = entry.runtime_data
     if runtime.has_stream:
+        await async_require_ffmpeg(hass, runtime.config.name)
         coordinator = async_require_coordinator(hass, entry.entry_id)
         async_add_entities([Generic3DPrinterStreamCamera(coordinator)])
     elif runtime.has_camera:
