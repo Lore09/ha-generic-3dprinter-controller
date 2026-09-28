@@ -118,3 +118,20 @@ def test_the_file_list_is_read_leniently_and_a_missing_list_is_an_error() -> Non
 def test_speed_modes_and_jog_distances() -> None:
     assert [kobra.speed_mode_for(value) for value in (10, 75, 100, 125, 200)] == [1, 1, 2, 2, 3]
     assert kobra.distance_value(-10.0) == 10 and kobra.distance_value(0.4) == 0.4
+
+
+def test_a_session_keeps_its_secrets_out_of_its_repr() -> None:
+    """A log line or a traceback can print the session."""
+    session = kobra.Session(
+        broker_host="192.0.2.1",
+        broker_port=9883,
+        username="user",
+        password="hunter2",
+        device_id="device",
+        model_id="20030",
+        serial="F757-6C30-088E-57CA",
+        model_name=None,
+        firmware=None,
+        client_key="PRIVATE KEY",
+    )
+    assert "hunter2" not in repr(session) and "PRIVATE KEY" not in repr(session)
