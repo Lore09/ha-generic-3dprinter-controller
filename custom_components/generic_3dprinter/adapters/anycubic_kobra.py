@@ -52,7 +52,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Any, Final
@@ -220,14 +220,15 @@ class Session:
     broker_host: str
     broker_port: int
     username: str
-    password: str
+    #: Secrets stay out of the repr, which a log line or a traceback can print.
+    password: str = field(repr=False)
     device_id: str
     model_id: str
     serial: str
     model_name: str | None
     firmware: str | None
     client_cert: str | None = None
-    client_key: str | None = None
+    client_key: str | None = field(default=None, repr=False)
 
 
 def check_info(info: Mapping[str, Any]) -> None:
