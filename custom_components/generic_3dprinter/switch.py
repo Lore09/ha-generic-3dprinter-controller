@@ -1,4 +1,4 @@
-"""Switches for the printer's own lights.
+"""Switches for the printer's own lights, and for recording a timelapse.
 
 A printer's chamber light is the one thing a user reaches for constantly and the
 one thing most protocols expose as a plain on/off. The switch exists only when the
@@ -27,6 +27,7 @@ from .entity import (
     granted_capabilities,
 )
 from .models import FilamentSystem
+from .timelapse import TimelapseSwitch
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -58,6 +59,8 @@ async def async_setup_entry(
             Generic3DPrinterSwitch(coordinator, description)
             for description in SWITCH_DESCRIPTIONS
         )
+    if entry.runtime_data.camera_kind is not None:
+        async_add_entities([TimelapseSwitch(coordinator)])
     if granted[Capability.SET_AUTO_REFILL]:
 
         def build(filament: FilamentSystem) -> FilamentEntityFactories:

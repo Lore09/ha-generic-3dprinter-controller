@@ -248,6 +248,36 @@ The card draws a control only when the printer reports the capability for it, so
 printer that cannot start a print shows no print button, a printer that cannot jog
 shows no joystick, and a printer with no camera shows no camera pane.
 
+## Timelapse
+
+A printer with a camera gets a **Timelapse** switch, off until you turn it on. While
+it is on, every print is recorded: one frame each time the printer reports a new
+layer, or one every 30 seconds from a printer that reports no layer. When the job
+finishes, is cancelled or fails, the frames become an MP4 at 30 frames a second in
+Home Assistant's media folder, under `generic_3dprinter/<printer>/`, where the media
+browser shows it. Pausing does not end the job, and a job with a single frame leaves
+nothing behind. Turning the switch off during a print makes the video of what was
+recorded so far.
+
+Each video fires a `generic_3dprinter_timelapse` event with its `path`, its
+`media_content_id` and its number of `frames`, and the switch keeps the last one in
+its `last_video` attribute. On an Anycubic Kobra, taking a frame starts the camera,
+which also switches the printer's light on.
+
+```yaml
+automation:
+  - alias: Send the timelapse
+    triggers:
+      - trigger: event
+        event_type: generic_3dprinter_timelapse
+    actions:
+      - action: notify.mobile_app_phone
+        data:
+          message: "Your timelapse is ready ({{ trigger.event.data.frames }} frames)"
+          data:
+            video: "{{ trigger.event.data.media_content_id }}"
+```
+
 ## Automations
 
 Every reading is a normal entity, so the usual patterns work.

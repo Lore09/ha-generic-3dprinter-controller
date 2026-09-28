@@ -145,7 +145,8 @@
     },
     "switch": {
       "chamber_light": { "name": "Chamber light" },
-      "auto_refill": { "name": "Filament auto-refill" }
+      "auto_refill": { "name": "Filament auto-refill" },
+      "timelapse": { "name": "Timelapse" }
     },
     "camera": {
       "camera": { "name": "Camera" }

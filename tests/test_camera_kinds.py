@@ -144,3 +144,18 @@ async def test_a_still_comes_from_ffmpeg_and_a_failure_is_no_still(
         AsyncMock(side_effect=KeyError("ffmpeg")),
     ):
         assert await camera.async_camera_image() is None
+
+
+async def test_a_still_reuses_the_running_stream_and_restarts_a_dead_one(
+    hass: HomeAssistant, adapter: StreamProtocol
+) -> None:
+    """Restarting the capture cuts off a viewer, so a timelapse must not do it per frame."""
+    camera = _camera(_runtime(hass, adapter))
+    target = "custom_components.generic_3dprinter.camera.async_still_from_stream"
+    with patch(target, AsyncMock(return_value=b"\xff\xd8jpeg")):
+        assert await camera.async_camera_image() == b"\xff\xd8jpeg"
+        assert await camera.async_camera_image() == b"\xff\xd8jpeg"
+    assert adapter.starts == 1
+    with patch(target, AsyncMock(side_effect=[None, b"\xff\xd8again"])):
+        assert await camera.async_camera_image() == b"\xff\xd8again"
+    assert adapter.starts == 2

@@ -142,6 +142,8 @@ class Generic3DPrinterStreamCamera(Camera):
         self._attr_name = runtime.config.name
         self._attr_unique_id = f"{coordinator.config_entry.entry_id}_camera"
         self._attr_device_info = async_device_info(runtime)
+        #: The URL the last start handed out, which a still reuses while it plays.
+        self._source: str | None = None
 
     @property
     def runtime(self) -> PrinterRuntime:
@@ -156,10 +158,11 @@ class Generic3DPrinterStreamCamera(Camera):
     async def stream_source(self) -> str | None:
         """Start the printer's stream and return its URL, or ``None`` when it fails."""
         try:
-            return await self.runtime.adapter.async_stream_source()
+            self._source = await self.runtime.adapter.async_stream_source()
         except ProtocolError as err:
             _LOGGER.debug("%s: the stream did not start: %s", self.runtime.config.name, err)
-            return None
+            self._source = None
+        return self._source
 
     async def async_refresh_providers(self, *, write_state: bool = True) -> None:
         """Skip Home Assistant's WebRTC probe, which would start the stream.
@@ -173,10 +176,18 @@ class Generic3DPrinterStreamCamera(Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return one still from the stream, or ``None`` when none can be taken."""
+        """Return one still from the stream, or ``None`` when none can be taken.
+
+        The stream already playing is tried first. Starting it again restarts the
+        printer's capture, which cuts off whoever is watching, so a still starts it
+        only when the running one gives no frame. A timelapse takes a still per layer.
+        """
+        if self._source is not None and (still := await self._async_still(self._source, width, height)):
+            return still
         source = await self.stream_source()
-        if source is None:
-            return None
+        return await self._async_still(source, width, height) if source is not None else None
+
+    async def _async_still(self, source: str, width: int | None, height: int | None) -> bytes | None:
         try:
             return await async_still_from_stream(self.hass, source, width, height)
         except Exception as err:  # noqa: BLE001 - no ffmpeg, or a stream that refused it
