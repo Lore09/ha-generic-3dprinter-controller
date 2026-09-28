@@ -7,7 +7,8 @@ in a general MQTT library for four packet types would be this integration's firs
 runtime dependency.
 
 What is implemented is exactly what such a printer needs: CONNECT with a user name
-and a password, SUBSCRIBE and PUBLISH at QoS 0, PINGREQ, and DISCONNECT. QoS 0 is
+and a password, SUBSCRIBE and PUBLISH at QoS 0, PINGREQ, and DISCONNECT, over plain
+TCP or over TLS. QoS 0 is
 enough because the printer's own protocol carries request ids and re-sends its
 status, and it keeps the client free of any retransmission state.
 """
@@ -15,7 +16,9 @@ status, and it keeps the client free of any retransmission state.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import ssl
 import struct
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -65,6 +68,23 @@ class MqttRefusedError(MqttError):
     def bad_credentials(self) -> bool:
         """Return ``True`` when the refusal is about the user name or password."""
         return self.code in (4, 5)
+
+
+def insecure_tls_context() -> ssl.SSLContext:
+    """Return a TLS client context that checks neither the name nor the certificate.
+
+    A printer's own broker presents a certificate it signed itself, for an address
+    no certificate names, so neither check can pass. The session is still
+    encrypted; what is given up is proof that the broker is the printer, which a
+    LAN client of a printer does not have by any other means either. The
+    certificate's fingerprint is kept on the client, so a changed one is visible.
+
+    No certificate store is loaded, so this is safe to call on the event loop.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
 
 
 # ------------------------------------------------------------------ encoding
@@ -182,6 +202,8 @@ class MqttClient:
         self._packet_id = 0
         self._subacks: dict[int, asyncio.Future[bytes]] = {}
         self.last_error: str | None = None
+        #: SHA-256 of the broker's certificate, hex, for a TLS session.
+        self.peer_certificate_sha256: str | None = None
 
     @property
     def closed(self) -> bool:
@@ -198,16 +220,27 @@ class MqttClient:
         password: str | None,
         keepalive: int = 60,
         timeout: float = 10.0,
+        tls: ssl.SSLContext | None = None,
     ) -> None:
-        """Open the connection and wait for the broker to accept it."""
+        """Open the connection and wait for the broker to accept it.
+
+        ``tls`` wraps the connection in TLS with that context; ``None`` is plain TCP.
+        """
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=timeout
+                asyncio.open_connection(host, port, ssl=tls), timeout=timeout
             )
         except TimeoutError as err:
             raise MqttError(f"timed out connecting to {host}:{port}") from err
-        except OSError as err:
+        except (OSError, ssl.SSLError) as err:
             raise MqttError(f"cannot connect to {host}:{port}: {err}") from err
+
+        if tls is not None:
+            ssl_object = writer.get_extra_info("ssl_object")
+            certificate = ssl_object.getpeercert(binary_form=True) if ssl_object else None
+            self.peer_certificate_sha256 = (
+                hashlib.sha256(certificate).hexdigest() if certificate else None
+            )
 
         try:
             writer.write(

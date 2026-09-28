@@ -9,6 +9,10 @@ third-party camera cards, with no client needing to reach the printer at all.
 
 It shares the runtime's :class:`~.runtime.CameraHub`, so a camera tile, a card and
 a notification all read one upstream connection rather than one each.
+
+A printer whose camera is a native video stream gets a different entity: it hands
+Home Assistant the stream's URL, so the stream component plays it and shares one
+upstream connection between viewers the same way, and its stills come from ffmpeg.
 """
 
 from __future__ import annotations
@@ -16,13 +20,14 @@ from __future__ import annotations
 import logging
 
 from aiohttp import web
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import PrinterCoordinator
 from .entity import async_device_info, async_require_coordinator
+from .protocols import ProtocolError
 from .runtime import PrinterRuntime
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +38,20 @@ _LOGGER = logging.getLogger(__name__)
 FRAME_INTERVAL = 0.2
 
 
+async def async_still_from_stream(
+    hass: HomeAssistant, source: str, width: int | None, height: int | None
+) -> bytes | None:
+    """Return one JPEG taken from a video stream by Home Assistant's ffmpeg.
+
+    Imported here rather than at the top: the ffmpeg component needs a library that
+    is installed only where that component is used, and a printer without a stream
+    camera must not depend on it.
+    """
+    from homeassistant.components import ffmpeg
+
+    return await ffmpeg.async_get_image(hass, source, width=width, height=height)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -40,10 +59,12 @@ async def async_setup_entry(
 ) -> None:
     """Create the camera entity when the printer has a camera."""
     runtime: PrinterRuntime = entry.runtime_data
-    if not runtime.has_camera:
-        return
-    coordinator = async_require_coordinator(hass, entry.entry_id)
-    async_add_entities([Generic3DPrinterCamera(coordinator)])
+    if runtime.has_stream:
+        coordinator = async_require_coordinator(hass, entry.entry_id)
+        async_add_entities([Generic3DPrinterStreamCamera(coordinator)])
+    elif runtime.has_camera:
+        coordinator = async_require_coordinator(hass, entry.entry_id)
+        async_add_entities([Generic3DPrinterCamera(coordinator)])
 
 
 class Generic3DPrinterCamera(Camera):
@@ -104,3 +125,60 @@ class Generic3DPrinterCamera(Camera):
         from .views import async_proxy_mjpeg_stream
 
         return await async_proxy_mjpeg_stream(request, self.runtime)
+
+
+class Generic3DPrinterStreamCamera(Camera):
+    """A printer camera that is a native video stream, played by Home Assistant."""
+
+    _attr_has_entity_name = False
+    _attr_should_poll = False
+    _attr_supported_features = CameraEntityFeature.STREAM
+
+    def __init__(self, coordinator: PrinterCoordinator) -> None:
+        """Bind the camera to its coordinator and its printer's device."""
+        super().__init__()
+        self._coordinator = coordinator
+        runtime = coordinator.runtime
+        self._attr_name = runtime.config.name
+        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_camera"
+        self._attr_device_info = async_device_info(runtime)
+
+    @property
+    def runtime(self) -> PrinterRuntime:
+        """Return everything this integration knows about the printer."""
+        return self._coordinator.runtime
+
+    @property
+    def available(self) -> bool:
+        """Return ``False`` while the coordinator's last poll failed."""
+        return self._coordinator.last_update_success
+
+    async def stream_source(self) -> str | None:
+        """Start the printer's stream and return its URL, or ``None`` when it fails."""
+        try:
+            return await self.runtime.adapter.async_stream_source()
+        except ProtocolError as err:
+            _LOGGER.debug("%s: the stream did not start: %s", self.runtime.config.name, err)
+            return None
+
+    async def async_refresh_providers(self, *, write_state: bool = True) -> None:
+        """Skip Home Assistant's WebRTC probe, which would start the stream.
+
+        The probe calls :meth:`stream_source` whenever the entity is added or a
+        provider registers, and starting a printer's camera is not free: on an
+        Anycubic Kobra it switches the light on. Playback falls back to HLS, which
+        asks for the source only when someone actually watches.
+        """
+
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Return one still from the stream, or ``None`` when none can be taken."""
+        source = await self.stream_source()
+        if source is None:
+            return None
+        try:
+            return await async_still_from_stream(self.hass, source, width, height)
+        except Exception as err:  # noqa: BLE001 - no ffmpeg, or a stream that refused it
+            _LOGGER.debug("%s: no still from the stream: %s", self.runtime.config.name, err)
+            return None

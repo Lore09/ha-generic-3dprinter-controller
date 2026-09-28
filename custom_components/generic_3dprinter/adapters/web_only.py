@@ -58,7 +58,7 @@ class WebOnlyProtocol(Protocol):
     async def async_teardown(self) -> None:
         """Return at once. This adapter holds nothing to close."""
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return a snapshot that claims nothing beyond the host answering.
 
         An unreachable host is reported as ``connected=False`` rather than raised,

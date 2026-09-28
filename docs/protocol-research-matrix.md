@@ -604,6 +604,9 @@ Short answer: **Marlin exposes no HTTP server of its own.**
 
 ## 7. Anycubic Kobra and Photon
 
+> The Kobra generation is now implemented. `docs/protocol-anycubic-kobra.md` supersedes
+> this section for it, with later sources, including the Kobra X's own commands.
+
 Two premises in the brief are wrong, and both would send an adapter down a dead end.
 
 1. There is no local HTTP REST API and no UDP discovery on the Kobra 2, 3, S1, or X generation. The stock LAN surface is an MQTT broker reached through a signed HTTP handshake. The `:80` in the brief is not the API. Port 71 is an OctoPrint-compatibility API that only exists once Rinkhals is installed, and 18088 is the camera.

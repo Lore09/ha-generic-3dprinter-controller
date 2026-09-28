@@ -1,20 +1,15 @@
-"""Fingerprint a printer on the local network.
+"""Find printers on the local network, without naming a protocol.
 
 Discovery exists to save the user from guessing a protocol, not to guess one for
-them. A probe that answers identifies a candidate, the config flow shows what it
-found, and the user confirms. Nothing here sends a command to a printer, because a
-wrong guess on a machine that treats an unknown command as fatal is how hardware
-gets bricked.
+them. Every adapter may broadcast for its own printers and may identify one host;
+both are read-only, and nothing here sends a command to a printer, because a wrong
+guess on a machine that treats an unknown command as fatal is how hardware gets
+bricked.
 
-Three probes are used together:
-
-* a UDP broadcast carrying the SDCP discovery literal, which a Centauri Carbon
-  answers with its mainboard id and firmware version;
-* a UDP datagram carrying the JSON discovery request Elegoo's own slicer sends,
-  which a Centauri Carbon 2 answers with its serial number, its model, and whether
-  it is in LAN-only mode;
-* a TCP connect plus a small HTTP fingerprint, which identifies Moonraker,
-  OctoPrint and PrusaLink from their own headers and endpoints.
+This module holds what the adapters share: the UDP probe, the TCP port probe, the
+HTTP fingerprint, and the engine that asks every registration and ranks what
+answered. A printer that identifies itself outranks an HTTP fingerprint, which
+outranks an open port.
 """
 
 from __future__ import annotations
@@ -23,45 +18,26 @@ import asyncio
 import json
 import logging
 import socket
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import aiohttp
 
 from .const import ProtocolId
 
+if TYPE_CHECKING:
+    from .registry import AdapterRegistration
+
 _LOGGER = logging.getLogger(__name__)
 
-SDCP_DISCOVERY_PORT: Final = 3000
-SDCP_DISCOVERY_PROBE: Final = b"M99999"
-CC2_DISCOVERY_PORT: Final = 52700
-CC2_DISCOVERY_PROBE: Final = b'{"id": 0, "method": 7000}'
 DISCOVERY_TIMEOUT: Final = 3.0
 CONNECT_TIMEOUT: Final = 0.6
 HTTP_TIMEOUT: Final = 3.0
 MAX_RESPONSE_BYTES: Final = 65536
 
-#: Ports worth a connect probe, with the protocol each one suggests. A port that
-#: answers is a hint, never a conclusion.
-CANDIDATE_PORTS: Final[tuple[tuple[int, ProtocolId], ...]] = (
-    (7125, ProtocolId.MOONRAKER),
-    (5000, ProtocolId.OCTOPRINT),
-    (80, ProtocolId.WEB_ONLY),
-    (3030, ProtocolId.SDCP_CC1),
-    (1883, ProtocolId.ELEGOO_CC2),
-)
-
-#: HTTP fingerprints, checked against the first response body and headers.
-HTTP_FINGERPRINTS: Final[tuple[tuple[str, ProtocolId], ...]] = (
-    ("octoprint", ProtocolId.OCTOPRINT),
-    ("prusalink", ProtocolId.PRUSALINK),
-    ("prusa", ProtocolId.PRUSALINK),
-    ("moonraker", ProtocolId.MOONRAKER),
-    ("klipper", ProtocolId.MOONRAKER),
-    ("duet", ProtocolId.DUET),
-    ("reprap", ProtocolId.DUET),
-    ("elegoo", ProtocolId.SDCP_CC1),
-)
+#: Ports whose front page is worth fingerprinting, in the order they are tried.
+HTTP_PORTS: Final[tuple[int, ...]] = (7125, 5000, 80, 443)
 
 
 @dataclass(slots=True)
@@ -75,6 +51,8 @@ class DiscoveryResult:
     mainboard_id: str | None = None
     firmware: str | None = None
     model: str | None = None
+    #: The printer's own model id, for a protocol with model profiles.
+    model_id: str | None = None
     open_ports: list[int] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     #: Whether the printer says it serves local clients only. ``None`` when the
@@ -82,6 +60,8 @@ class DiscoveryResult:
     lan_only: bool | None = None
     #: Whether the printer says an access code is set. ``None`` when unknown.
     access_code_set: bool | None = None
+    #: Configuration the printer told us, such as its serial number, for the form.
+    prefill: Mapping[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         """Return a JSON-safe summary for the config flow."""
@@ -92,11 +72,16 @@ class DiscoveryResult:
             "mainboard_id": self.mainboard_id,
             "firmware": self.firmware,
             "model": self.model,
+            "model_id": self.model_id,
             "open_ports": self.open_ports,
             "evidence": self.evidence,
             "lan_only": self.lan_only,
             "access_code_set": self.access_code_set,
+            "prefill": dict(self.prefill),
         }
+
+
+# ------------------------------------------------------------------ UDP probe
 
 
 class _JsonDiscoveryProtocol(asyncio.DatagramProtocol):
@@ -128,7 +113,7 @@ class _JsonDiscoveryProtocol(asyncio.DatagramProtocol):
         _LOGGER.debug("discovery transport error: %s", exc)
 
 
-async def _async_probe_udp(
+async def async_probe_udp(
     probe: bytes,
     target: tuple[str, int],
     timeout: float,
@@ -163,104 +148,11 @@ async def _async_probe_udp(
     return protocol.reply, protocol.sender or ""
 
 
-async def async_discover_sdcp(timeout: float = DISCOVERY_TIMEOUT) -> DiscoveryResult | None:
-    """Broadcast the Elegoo discovery probe and parse the first reply."""
-    answer = await _async_probe_udp(
-        SDCP_DISCOVERY_PROBE, ("255.255.255.255", SDCP_DISCOVERY_PORT), timeout
-    )
-    if answer is None:
-        return None
-    reply, _sender = answer
-
-    data = reply.get("Data") if isinstance(reply.get("Data"), dict) else reply
-    if not isinstance(data, dict):
-        return None
-
-    mainboard = str(data.get("MainboardID") or "") or None
-    return DiscoveryResult(
-        host=str(data.get("MainboardIP") or "") or _reply_host(reply),
-        protocol=ProtocolId.SDCP_CC1,
-        candidates=[ProtocolId.SDCP_CC1],
-        mainboard_id=mainboard,
-        firmware=str(data.get("FirmwareVersion") or "") or None,
-        model=str(data.get("MachineName") or data.get("Name") or "") or None,
-        evidence=["answered the UDP discovery probe on port 3000"],
-    )
+# ------------------------------------------------------------ TCP and HTTP hints
 
 
-def _reply_host(reply: dict[str, Any]) -> str:
-    data = reply.get("Data")
-    if isinstance(data, dict):
-        return str(data.get("MainboardIP") or "")
-    return ""
-
-
-def _flag(value: Any) -> bool | None:
-    """Read a discovery flag the printer may send as an integer or a boolean."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int):
-        return value == 1
-    return None
-
-
-def parse_cc2_reply(reply: dict[str, Any], sender: str) -> DiscoveryResult | None:
-    """Return what a Centauri Carbon 2 said about itself, or ``None`` for anything else.
-
-    The reply carries no address of its own, so the sender of the datagram is the
-    printer's address. Measured on a live printer::
-
-        {"id": 0, "result": {"host_name": "CC2 QAZJ", "lan_status": 0,
-         "machine_model": "Centauri Carbon 2", "protocol_version": "1.0.0",
-         "sn": "F01BXKSWL13QAZJ", "token_status": 0}}
-    """
-    result = reply.get("result")
-    if not isinstance(result, dict):
-        return None
-    serial = str(result.get("sn") or "").strip()
-    if not serial or not sender:
-        return None
-    lan_only = _flag(result.get("lan_status"))
-    access_code_set = _flag(result.get("token_status"))
-    evidence = [f"answered the UDP discovery probe on port {CC2_DISCOVERY_PORT}"]
-    if lan_only is False:
-        evidence.append("the printer is in cloud mode, not LAN-only mode")
-    return DiscoveryResult(
-        host=sender,
-        protocol=ProtocolId.ELEGOO_CC2,
-        candidates=[ProtocolId.ELEGOO_CC2],
-        mainboard_id=serial,
-        firmware=None,
-        model=str(result.get("machine_model") or "") or None,
-        evidence=evidence,
-        lan_only=lan_only,
-        access_code_set=access_code_set,
-    )
-
-
-def _is_cc2_reply(payload: dict[str, Any]) -> bool:
-    return isinstance(payload.get("result"), dict) and "sn" in payload["result"]
-
-
-async def async_discover_cc2(
-    host: str | None = None, timeout: float = DISCOVERY_TIMEOUT
-) -> DiscoveryResult | None:
-    """Ask for a Centauri Carbon 2, on one host or by broadcast.
-
-    This is the discovery request Elegoo's own slicer sends. It is answered even
-    while another client holds a session, and it is the only way to learn the
-    serial number every MQTT topic is built from.
-    """
-    target = (host or "255.255.255.255", CC2_DISCOVERY_PORT)
-    answer = await _async_probe_udp(CC2_DISCOVERY_PROBE, target, timeout, _is_cc2_reply)
-    if answer is None:
-        return None
-    reply, sender = answer
-    return parse_cc2_reply(reply, sender)
-
-
-async def async_probe_ports(host: str) -> list[int]:
-    """Return every candidate port that accepts a TCP connection."""
+async def async_probe_ports(host: str, candidates: Sequence[int]) -> list[int]:
+    """Return every candidate port that accepts a TCP connection, in order."""
 
     async def probe(port: int) -> int | None:
         try:
@@ -277,12 +169,14 @@ async def async_probe_ports(host: str) -> list[int]:
             pass
         return port
 
-    results = await asyncio.gather(*(probe(port) for port, _ in CANDIDATE_PORTS))
+    results = await asyncio.gather(*(probe(port) for port in candidates))
     return [port for port in results if port is not None]
 
 
-async def async_fingerprint_http(host: str, port: int) -> tuple[ProtocolId | None, list[str]]:
-    """Ask a port for its front page and match the body against known products."""
+async def async_fingerprint_http(
+    host: str, port: int, markers: Sequence[tuple[str, ProtocolId]]
+) -> tuple[ProtocolId | None, list[str]]:
+    """Ask a port for its front page and match it against each protocol's markers."""
     url = f"http://{host}:{port}/"
     evidence: list[str] = []
     body = ""
@@ -301,7 +195,7 @@ async def async_fingerprint_http(host: str, port: int) -> tuple[ProtocolId | Non
         return None, evidence
 
     haystack = f"{body}\n{' '.join(f'{k}: {v}' for k, v in headers.items())}".lower()
-    for marker, protocol in HTTP_FINGERPRINTS:
+    for marker, protocol in markers:
         if marker in haystack:
             evidence.append(f"{url} mentions {marker!r}")
             return protocol, evidence
@@ -310,31 +204,71 @@ async def async_fingerprint_http(host: str, port: int) -> tuple[ProtocolId | Non
     return None, evidence
 
 
-async def async_discover_host(host: str) -> DiscoveryResult | None:
-    """Probe one host and return the best candidate, or ``None`` when nothing answers.
+# --------------------------------------------------------------------- engine
 
-    A Centauri Carbon 2 identifies itself over UDP, which outranks every port hint:
-    its broker port is plain MQTT and says nothing about who is behind it.
+
+async def async_discover_all(
+    registrations: Iterable[AdapterRegistration], timeout: float = DISCOVERY_TIMEOUT
+) -> list[DiscoveryResult]:
+    """Ask every protocol to broadcast for its printers, one result per host.
+
+    A protocol whose probe fails is skipped, because a network that refuses one
+    broadcast should not hide the printers another one found. When two protocols
+    answer for one host, the one registered first wins.
     """
-    ports, cc2 = await asyncio.gather(async_probe_ports(host), async_discover_cc2(host))
-    if cc2 is not None:
-        cc2.open_ports = ports
-        return cc2
-    if not ports:
+    ordered = list(registrations)
+    answers = await asyncio.gather(
+        *(registration.adapter.async_discover(timeout) for registration in ordered),
+        return_exceptions=True,
+    )
+    found: dict[str, DiscoveryResult] = {}
+    for registration, answer in zip(ordered, answers, strict=True):
+        if isinstance(answer, BaseException):
+            _LOGGER.debug("%s discovery failed: %s", registration.id.value, answer)
+            continue
+        for result in answer:
+            found.setdefault(result.host, result)
+    return list(found.values())
+
+
+async def async_identify_host(
+    registrations: Iterable[AdapterRegistration], host: str, timeout: float = DISCOVERY_TIMEOUT
+) -> DiscoveryResult | None:
+    """Return the best guess for one host, or ``None`` when nothing answers.
+
+    Every protocol is asked whether the host is one of its printers. Only when none
+    says so are the ports and front pages the registrations name looked at.
+    """
+    ordered = list(registrations)
+    answers = await asyncio.gather(
+        *(registration.adapter.async_identify(host, timeout) for registration in ordered),
+        return_exceptions=True,
+    )
+    for registration, answer in zip(ordered, answers, strict=True):
+        if isinstance(answer, BaseException):
+            _LOGGER.debug("%s did not identify %s: %s", registration.id.value, host, answer)
+        elif answer is not None:
+            return answer
+
+    hints: list[tuple[int, ProtocolId]] = [
+        (port, registration.id) for registration in ordered for port in registration.ports
+    ]
+    candidate_ports = list(dict.fromkeys(port for port, _ in hints))
+    open_ports = await async_probe_ports(host, candidate_ports)
+    if not open_ports:
         return None
 
-    evidence = [f"open ports: {', '.join(str(port) for port in ports)}"]
+    evidence = [f"open ports: {', '.join(str(port) for port in open_ports)}"]
     candidates: list[ProtocolId] = []
-    for port, hint in CANDIDATE_PORTS:
-        if port in ports and hint not in candidates:
-            candidates.append(hint)
+    for port, protocol in hints:
+        if port in open_ports and protocol not in candidates:
+            candidates.append(protocol)
 
-    # An HTTP fingerprint outranks a bare open port, because two products can share
-    # a port while only one of them answers to its own name.
-    for port in (7125, 5000, 80, 443):
-        if port not in ports and not (port == 443):
+    markers = [(marker, registration.id) for registration in ordered for marker in registration.http_markers]
+    for port in HTTP_PORTS:
+        if port not in open_ports:
             continue
-        protocol, note = await async_fingerprint_http(host, port)
+        protocol, note = await async_fingerprint_http(host, port, markers)
         evidence.extend(note)
         if protocol is not None:
             candidates = [protocol, *[item for item in candidates if item != protocol]]
@@ -342,11 +276,10 @@ async def async_discover_host(host: str) -> DiscoveryResult | None:
 
     if not candidates:
         return None
-
     return DiscoveryResult(
         host=host,
         protocol=candidates[0],
         candidates=candidates,
-        open_ports=ports,
+        open_ports=open_ports,
         evidence=evidence,
     )

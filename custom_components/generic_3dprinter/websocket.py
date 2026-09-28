@@ -134,7 +134,7 @@ def _summary(hass: HomeAssistant, runtime: PrinterRuntime) -> dict:
         "model": runtime.snapshot.model,
         "connected": runtime.snapshot.connected,
         "print_state": runtime.snapshot.print_state.value,
-        "camera": runtime.has_camera,
+        "camera": runtime.camera_kind is not None,
         "entity_id": _state_entity(hass, runtime.entry_id),
     }
 
@@ -176,6 +176,8 @@ def _not_answering_description(entry: ConfigEntry) -> dict:
         "connected": False,
         "last_error": _not_answering(entry),
         "camera": False,
+        "camera_kind": None,
+        "camera_entity_id": None,
         "web_ui": False,
         "camera_url": None,
         "snapshot_url": None,
@@ -185,6 +187,7 @@ def _not_answering_description(entry: ConfigEntry) -> dict:
         "camera_stats": None,
         "unsafe_features": [],
         "filament_presets": [],
+        "model_profile": None,
         "printer": {
             "protocol": protocol,
             "connected": False,

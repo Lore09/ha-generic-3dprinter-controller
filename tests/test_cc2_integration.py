@@ -17,7 +17,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.generic_3dprinter import discovery
 from custom_components.generic_3dprinter.adapters import elegoo_cc2 as cc2
 from custom_components.generic_3dprinter.const import (
     DATA_COORDINATORS,
@@ -41,7 +40,7 @@ def discovery_answering(lan_status: int):
 
     async def fake(host: str | None = None, timeout: float = 0):
         reply = {"id": 0, "result": {**LIVE_RESULT, "lan_status": lan_status}}
-        return discovery.parse_cc2_reply(reply, host or "192.0.2.10")
+        return cc2.parse_cc2_reply(reply, host or "192.0.2.10")
 
     return fake
 
@@ -294,3 +293,25 @@ async def test_a_centauri_carbon_2_entry(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert cc2_printer.registered == [], "the unload left the printer's client slot taken"
+
+
+async def test_a_blocked_control_says_why(
+    hass: HomeAssistant, cc2_printer: FakeCC2Printer
+) -> None:
+    """Mid-print, home stays available and carries the printer's reason; pause does not."""
+    from homeassistant.helpers import entity_registry as er
+
+    entry = cc2_entry(hass, cc2_printer)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+
+    def state_of(key: str):
+        entity_id = registry.async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_{key}")
+        assert entity_id, key
+        return hass.states.get(entity_id)
+
+    home = state_of("home")
+    assert home.state != "unavailable"
+    assert home.attributes["blocked_reason"] == "the printer is not idle"
+    assert "blocked_reason" not in state_of("pause").attributes

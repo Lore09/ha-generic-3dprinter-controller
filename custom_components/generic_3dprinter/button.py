@@ -99,6 +99,7 @@ class Generic3DPrinterButton(Generic3DPrinterEntity, ButtonEntity):
         """Bind the entity to its coordinator and its description."""
         super().__init__(coordinator, description.key)
         self.entity_description = description
+        self._command = description.command
 
     async def async_press(self) -> None:
         """Send this button's command, letting a refusal reach the caller."""

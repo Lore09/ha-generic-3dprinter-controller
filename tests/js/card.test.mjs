@@ -181,6 +181,7 @@ async function mountCard({
   files = [],
   confirm = true,
   describe,
+  beforeMount,
 } = {}) {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     runScripts: "outside-only",
@@ -212,6 +213,7 @@ async function mountCard({
 
   const source = readFileSync(CARD_PATH, "utf8");
   window.eval(source);
+  if (beforeMount) beforeMount(window);
 
   const calls = [];
   const services = [];
@@ -320,6 +322,22 @@ test("renders the printer name, state and secondary line", async () => {
   assert.deepEqual(texts(card, ".state"), ["Printing"]);
   assert.match(card.shadowRoot.querySelector(".subtitle").textContent, /Centauri Carbon/);
   assert.match(card.shadowRoot.querySelector(".subtitle").textContent, /V1\.4\.49/);
+});
+
+test("a model this project has not measured is marked as unverified", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Printer" }],
+    descriptions: {
+      entry1: description({ model: "Kobra 3", model_profile: { id: "20024", name: "Kobra 3", verified: false } }),
+    },
+  });
+  assert.match(card.shadowRoot.querySelector(".subtitle").textContent, /Kobra 3 · fw V1\.4\.49 · unverified model/);
+
+  const measured = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Printer" }],
+    descriptions: { entry1: description({ model_profile: { id: "1", name: "Centauri Carbon", verified: true } }) },
+  });
+  assert.doesNotMatch(measured.card.shadowRoot.querySelector(".subtitle").textContent, /unverified/);
 });
 
 test("shows progress, layers, times and temperatures", async () => {
@@ -489,6 +507,47 @@ test("a poll that signs a new url does not restart the stream", async () => {
   assert.ok(counter >= 3);
   assert.equal(card.shadowRoot.querySelector(".camera img"), image, "the image element was rebuilt");
   assert.equal(image.getAttribute("src"), before);
+});
+
+test("a stream camera is played by Home Assistant's own camera card", async () => {
+  const created = [];
+  const { card, window, hass } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Kobra" }],
+    descriptions: {
+      entry1: description({
+        camera_kind: "stream",
+        camera_entity_id: "camera.kobra",
+        camera_url: null,
+        snapshot_url: null,
+        printer: snapshot({ capabilities: ["pause", "camera_stream"] }),
+      }),
+    },
+    beforeMount(win) {
+      win.loadCardHelpers = async () => ({
+        createCardElement(config) {
+          const element = win.document.createElement("div");
+          element.className = "ha-stream-card";
+          created.push({ config: JSON.parse(JSON.stringify(config)), element });
+          return element;
+        },
+      });
+    },
+  });
+  await tick(40);
+  assert.equal(created.length, 1);
+  assert.deepEqual(created[0].config, {
+    type: "picture-entity",
+    entity: "camera.kobra",
+    camera_view: "live",
+    show_name: false,
+    show_state: false,
+  });
+  assert.equal(created[0].element.hass, hass);
+  const frame = card.shadowRoot.querySelector(".camera-frame");
+  assert.ok(frame.contains(created[0].element));
+  assert.equal(frame.querySelector("img"), null, "a stream camera must not open an MJPEG url");
+  assert.ok(visible(frame));
+  void window;
 });
 
 test("the camera can be hidden from the configuration", async () => {
@@ -744,9 +803,10 @@ test("the home buttons home the axes they name", async () => {
   assert.equal(all(card, ".axis.homed").length, 2);
 });
 
-test("the head cannot be moved while a job is running", async () => {
+test("the head cannot be moved while the printer refuses it, and the card says why", async () => {
   const cc2 = idleCc2();
   cc2.printer.print_state = "printing";
+  cc2.printer.blocked = { home: "the printer is not idle", jog: "the printer is not idle" };
   const { card, calls } = await mountCard({
     printers: [{ entry_id: "entry1", name: "CC2" }],
     descriptions: { entry1: cc2 },
@@ -758,7 +818,50 @@ test("the head cannot be moved while a job is running", async () => {
   joystick.dispatchEvent(new card.ownerDocument.defaultView.KeyboardEvent("keydown", { key: "ArrowUp" }));
   await tick();
   assert.deepEqual(sent(calls), []);
-  assert.match(card.shadowRoot.querySelector(".motion-hint").textContent, /cannot be moved/);
+  assert.match(card.shadowRoot.querySelector(".motion-hint").textContent, /not idle/);
+});
+
+test("the card leaves motion to the printer's own rules", async () => {
+  // A printer that reports nothing blocked may be moved, whatever its state.
+  const cc2 = idleCc2();
+  cc2.printer.print_state = "printing";
+  const { card, calls } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  assert.ok(command(card, "jog").every((node) => !node.disabled));
+  command(card, "home")[0].click();
+  await tick();
+  assert.equal(sent(calls).length, 1);
+});
+
+test("a setting the printer refuses now is disabled, with the printer's reason", async () => {
+  const cc2 = idleCc2();
+  cc2.printer.blocked = { set_bed_temp: "the printer applies this only during a print" };
+  const { card, calls } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  const bed = card.shadowRoot.querySelector('.heater[data-heater="bed"]');
+  const nozzle = card.shadowRoot.querySelector('.heater[data-heater="hotend"]');
+  assert.ok([...bed.querySelectorAll("button, input")].every((node) => node.disabled));
+  assert.ok([...nozzle.querySelectorAll("button, input")].every((node) => !node.disabled));
+  assert.match(card.shadowRoot.querySelector(".heater-hint").textContent, /only during a print/);
+  assert.deepEqual(sent(calls), []);
+});
+
+test("a refused fan or speed setting says why", async () => {
+  const cc2 = idleCc2();
+  cc2.printer.blocked = { set_speed: "only during a print", set_fan_speed: "only during a print" };
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: cc2 },
+  });
+  await openTab(card, "controls");
+  assert.ok(all(card, ".fans input").every((node) => node.disabled));
+  assert.match(card.shadowRoot.querySelector(".fan-hint").textContent, /only during a print/);
 });
 
 // ------------------------------------------------------------------- power
@@ -1065,6 +1168,10 @@ function canvasCc2({ commands = FILAMENT_COMMANDS, system = canvasSystem(), stat
   cc2.printer.capabilities = [...cc2.printer.capabilities, "filament_slots", ...commands];
   cc2.printer.filament = system;
   cc2.printer.print_state = state;
+  if (state !== "idle") {
+    const reason = "the printer is not idle";
+    cc2.printer.blocked = { load_filament: reason, unload_filament: reason, set_filament: reason, home: reason, jog: reason };
+  }
   return cc2;
 }
 
@@ -1267,7 +1374,7 @@ test("the slots cannot be changed while the printer is busy", async () => {
   for (const name of [".fd-load", ".fd-unload", ".fd-edit"]) {
     assert.equal(dialog.querySelector(name).disabled, true, `${name} is enabled mid-print`);
   }
-  assert.match(dialog.querySelector(".fd-note").textContent, /busy/);
+  assert.match(dialog.querySelector(".fd-note").textContent, /not idle/);
 });
 
 test("what the unit is doing is shown on the card and in the popup", async () => {

@@ -8,6 +8,13 @@
           "discover": "Look for a printer on my network"
         }
       },
+      "pick": {
+        "title": "Which printer?",
+        "description": "More than one printer answered. Pick the one to set up; the others can be added the same way afterwards.",
+        "data": {
+          "printer": "Printer"
+        }
+      },
       "protocol": {
         "title": "Which protocol does the printer speak?",
         "description": "Pick the printer's control protocol, or its product line where one is listed. If you are unsure, choose Web page only and the integration will proxy the printer's own page.",

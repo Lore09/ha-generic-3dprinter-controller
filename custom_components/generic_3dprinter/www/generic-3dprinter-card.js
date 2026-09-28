@@ -908,17 +908,17 @@ class FilamentDialog {
     }
 
     const online = this.view.online();
-    const job = this.view.activeJob();
+    const refused = (command) => Boolean(this.view.blockedReason(command));
     const busy = (command) => this.card.isBusy(this.view.entryId, command);
     const canLoad = this.can("load_filament");
     const canUnload = this.can("unload_filament");
     const canEdit = this.can("set_filament");
     this.loadButton.hidden = !canLoad;
-    this.loadButton.disabled = !online || job || !slot.loaded || slot.active || busy("load_filament");
+    this.loadButton.disabled = !online || refused("load_filament") || !slot.loaded || slot.active || busy("load_filament");
     this.unloadButton.hidden = !canUnload;
-    this.unloadButton.disabled = !online || job || !slot.active || busy("unload_filament");
+    this.unloadButton.disabled = !online || refused("unload_filament") || !slot.active || busy("unload_filament");
     this.editButton.hidden = !canEdit;
-    this.editButton.disabled = !online || job || busy("set_filament");
+    this.editButton.disabled = !online || refused("set_filament") || busy("set_filament");
     this.actions.hidden = !canLoad && !canUnload && !canEdit;
 
     let note = "";
@@ -926,8 +926,9 @@ class FilamentDialog {
       note = "This printer reports what is in each slot. Loading, unloading and changing a slot are done on its own screen.";
     } else if (!online) {
       note = "The printer is not answering.";
-    } else if (job) {
-      note = "The slots cannot be changed while the printer is busy.";
+    } else if (this.view.firstBlocked(["load_filament", "unload_filament", "set_filament"])) {
+      const reason = this.view.firstBlocked(["load_filament", "unload_filament", "set_filament"]);
+      note = `The slots cannot be changed now: ${reason}.`;
     } else if (!slot.loaded && canLoad) {
       note = "Put a spool in this slot to load it.";
     } else {
@@ -947,7 +948,10 @@ class FilamentDialog {
     if (settable && this.card.shadowRoot?.activeElement !== this.refillInput) {
       this.refillInput.checked = Boolean(system.auto_refill);
     }
-    this.refillInput.disabled = !this.view.online() || this.card.isBusy(this.view.entryId, "set_auto_refill");
+    this.refillInput.disabled =
+      !this.view.online() ||
+      this.card.isBusy(this.view.entryId, "set_auto_refill") ||
+      Boolean(this.view.blockedReason("set_auto_refill"));
   }
 }
 
@@ -1176,6 +1180,8 @@ class PrinterView {
     cool.addEventListener("click", () => this.applyPreset({ name: "Cool down", hotend: 0, bed: 0, chamber: 0 }));
     this.presetRow.appendChild(cool);
     this.heaterSection.appendChild(this.presetRow);
+    this.heaterHint = el("div", "hint heater-hint");
+    this.heaterSection.appendChild(this.heaterHint);
     panel.appendChild(this.heaterSection);
 
     // Fans and speed.
@@ -1197,6 +1203,8 @@ class PrinterView {
     this.fanSection.appendChild(this.speedSlider.row);
     this.reportedFans = el("div", "reported-fans");
     this.fanSection.appendChild(this.reportedFans);
+    this.fanHint = el("div", "hint fan-hint");
+    this.fanSection.appendChild(this.fanHint);
     panel.appendChild(this.fanSection);
 
     // Motion.
@@ -1353,18 +1361,32 @@ class PrinterView {
   }
 
   jog(axis, direction) {
-    const available = this.capabilities.includes("jog") && this.motionAllowed();
+    const available = this.capabilities.includes("jog") && this.online() && !this.blockedReason("jog");
     if (!available) return;
     this.card.send(this.entryId, "jog", { axis, distance: direction * this.jogStep });
   }
 
   home(axes) {
-    if (!this.capabilities.includes("home") || !this.motionAllowed()) return;
+    if (!this.capabilities.includes("home") || !this.online() || this.blockedReason("home")) return;
     this.card.send(this.entryId, "home", { axes });
   }
 
-  motionAllowed() {
-    return this.online() && !this.activeJob();
+  /**
+   * Return why the printer refuses `command` right now, or null. The backend owns
+   * these rules; the card only draws them, so it never guesses a printer's limits.
+   */
+  blockedReason(command) {
+    const blocked = this.snapshot.blocked || {};
+    return blocked[command] || null;
+  }
+
+  /** Return the first reason among `commands` the printer refuses now, or "". */
+  firstBlocked(commands) {
+    for (const command of commands) {
+      const reason = this.blockedReason(command);
+      if (reason) return reason;
+    }
+    return "";
   }
 
   async applyPreset(preset) {
@@ -1450,6 +1472,7 @@ class PrinterView {
     const subtitle = [
       this.description.model || printer.model || this.description.protocol || printer.protocol,
       this.description.firmware ? `fw ${this.description.firmware}` : null,
+      this.description.model_profile && this.description.model_profile.verified === false ? "unverified model" : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1462,7 +1485,8 @@ class PrinterView {
     this.lightButton.hidden = !caps.includes("set_light");
     this.lightButton.classList.toggle("on", lightOn);
     this.lightButton.setAttribute("aria-pressed", String(lightOn));
-    this.lightButton.disabled = !this.online() || this.card.isBusy(this.entryId, "set_light");
+    this.lightButton.disabled =
+      !this.online() || this.card.isBusy(this.entryId, "set_light") || Boolean(this.blockedReason("set_light"));
 
     this.powerButton.hidden = !power;
     if (power) {
@@ -1509,7 +1533,12 @@ class PrinterView {
     const description = this.description;
     const live = description.camera_url;
     const still = description.snapshot_url;
-    const wanted = this.card.showCamera() && caps.includes("camera") && Boolean(live || still);
+    const streamed = description.camera_kind === "stream";
+    const wanted =
+      this.card.showCamera() &&
+      (streamed
+        ? caps.includes("camera_stream") && Boolean(description.camera_entity_id)
+        : caps.includes("camera") && Boolean(live || still));
     this.cameraColumn.hidden = !wanted;
     this.body.classList.toggle("with-camera", wanted);
     if (!wanted) {
@@ -1522,6 +1551,12 @@ class PrinterView {
       this.cameraPlaceholder.textContent = "Switched off";
       this.cameraPlaceholder.hidden = false;
       this.cameraOverlay.hidden = true;
+      return;
+    }
+
+    if (streamed) {
+      this._showStream(description.camera_entity_id);
+      this._paintCameraOverlay();
       return;
     }
 
@@ -1567,7 +1602,60 @@ class PrinterView {
       if (this.image.getAttribute("src") !== src) this.image.src = src;
     }
     this.image.hidden = false;
+    this._paintCameraOverlay();
+  }
 
+  /**
+   * Embed Home Assistant's own camera card for a printer whose camera is a video
+   * stream. Home Assistant plays it and shares one upstream connection between
+   * viewers, so the card neither ships a player nor opens the printer itself. The
+   * card is built once per entity and only handed the new `hass` on each update.
+   */
+  _showStream(entityId) {
+    if (this.image) this.image.hidden = true;
+    const hass = this.card.hass;
+    if (this.streamCard && this.streamEntity === entityId) {
+      this.streamCard.hass = hass;
+      this.streamCard.hidden = false;
+      return;
+    }
+    if (this.streamLoading === entityId) return;
+    this.streamLoading = entityId;
+    if (this.streamCard) this.streamCard.remove();
+    this.streamCard = null;
+    const helpers = typeof window.loadCardHelpers === "function" ? window.loadCardHelpers() : null;
+    if (!helpers) {
+      this.cameraPlaceholder.textContent = "Camera unavailable";
+      this.cameraPlaceholder.hidden = false;
+      this.streamLoading = null;
+      return;
+    }
+    Promise.resolve(helpers)
+      .then((loaded) => {
+        const element = loaded.createCardElement({
+          type: "picture-entity",
+          entity: entityId,
+          camera_view: "live",
+          show_name: false,
+          show_state: false,
+        });
+        element.classList.add("stream-card");
+        element.hass = this.card.hass;
+        this.streamCard = element;
+        this.streamEntity = entityId;
+        this.cameraFrame.insertBefore(element, this.cameraFrame.firstChild);
+        this.cameraPlaceholder.hidden = true;
+      })
+      .catch(() => {
+        this.cameraPlaceholder.textContent = "Camera unavailable";
+        this.cameraPlaceholder.hidden = false;
+      })
+      .finally(() => {
+        this.streamLoading = null;
+      });
+  }
+
+  _paintCameraOverlay() {
     const snapshot = this.snapshot;
     this.cameraOverlay.replaceChildren();
     const state = snapshot.print_state || "unknown";
@@ -1600,6 +1688,7 @@ class PrinterView {
   }
 
   _suspendCamera() {
+    if (this.streamCard) this.streamCard.hidden = true;
     if (!this.image || this.camera.suspended) return;
     this.camera.suspended = true;
     this.image.removeAttribute("src");
@@ -1687,11 +1776,11 @@ class PrinterView {
     const paused = state === "paused";
     const busy = (command) => this.card.isBusy(this.entryId, command);
     this.pauseButton.hidden = !caps.includes("pause");
-    this.pauseButton.disabled = !online || !printing || busy("pause");
+    this.pauseButton.disabled = !online || !printing || busy("pause") || Boolean(this.blockedReason("pause"));
     this.resumeButton.hidden = !caps.includes("resume");
-    this.resumeButton.disabled = !online || !paused || busy("resume");
+    this.resumeButton.disabled = !online || !paused || busy("resume") || Boolean(this.blockedReason("resume"));
     this.stopButton.hidden = !caps.includes("stop");
-    this.stopButton.disabled = !online || !ACTIVE_STATES.has(state) || busy("stop");
+    this.stopButton.disabled = !online || !ACTIVE_STATES.has(state) || busy("stop") || Boolean(this.blockedReason("stop"));
     this.jobControls.hidden = !["pause", "resume", "stop"].some((item) => caps.includes(item));
   }
 
@@ -1750,12 +1839,16 @@ class PrinterView {
         const target = asNumber(temps.target);
         parts.input.value = target === null ? "" : String(Math.round(target));
       }
-      parts.input.disabled = !online;
+      const refused = Boolean(this.blockedReason(heater.command));
+      parts.input.disabled = !online || refused;
       for (const node of parts.row.querySelectorAll("button")) {
-        node.disabled = !online || busy(heater.command);
+        node.disabled = !online || refused || busy(heater.command);
       }
     }
     this.heaterSection.hidden = !anyHeater;
+    const heaterReason = online ? this.firstBlocked(HEATERS.filter((heater) => caps.includes(heater.command)).map((heater) => heater.command)) : "";
+    this.heaterHint.textContent = heaterReason ? `Temperatures: ${heaterReason}.` : "";
+    this.heaterHint.hidden = !heaterReason;
     for (const node of this.presetRow.querySelectorAll("button")) node.disabled = !online;
 
     const fans = snapshot.fans || {};
@@ -1771,7 +1864,7 @@ class PrinterView {
         slider.input.value = String(Math.round(value));
         slider.value.textContent = `${Math.round(value)}%`;
       }
-      slider.input.disabled = !online;
+      slider.input.disabled = !online || Boolean(this.blockedReason("set_fan_speed"));
     }
     const speed = asNumber(snapshot.speed_factor);
     const speedShown = caps.includes("set_speed");
@@ -1781,7 +1874,7 @@ class PrinterView {
         this.speedSlider.input.value = String(Math.min(100, Math.round(speed)));
         this.speedSlider.value.textContent = `${Math.round(speed)}%`;
       }
-      this.speedSlider.input.disabled = !online;
+      this.speedSlider.input.disabled = !online || Boolean(this.blockedReason("set_speed"));
     }
     this.reportedFans.replaceChildren();
     for (const fan of REPORTED_FANS) {
@@ -1791,21 +1884,27 @@ class PrinterView {
     }
     this.reportedFans.hidden = this.reportedFans.childElementCount === 0;
     this.fanSection.hidden = !anyFan && !speedShown;
+    const fanReason = online
+      ? this.firstBlocked([anyFan ? "set_fan_speed" : null, speedShown ? "set_speed" : null].filter(Boolean))
+      : "";
+    this.fanHint.textContent = fanReason ? `Fans and speed: ${fanReason}.` : "";
+    this.fanHint.hidden = !fanReason;
 
     const canJog = caps.includes("jog");
     const canHome = caps.includes("home");
-    const allowed = this.motionAllowed();
+    const jogReason = this.blockedReason("jog");
+    const homeReason = this.blockedReason("home");
     this.motionSection.hidden = !canJog && !canHome;
     this.joystick.hidden = !canJog;
     this.zColumn.hidden = !canJog && !canHome;
     this.stepChips.hidden = !canJog;
     for (const node of this.jogButtons) {
       node.hidden = !canJog;
-      node.disabled = !allowed || busy("jog");
+      node.disabled = !online || Boolean(jogReason) || busy("jog");
     }
     for (const node of [this.homeXY, this.homeZ, this.homeAll]) {
       node.hidden = !canHome;
-      node.disabled = !allowed || busy("home");
+      node.disabled = !online || Boolean(homeReason) || busy("home");
     }
     this.homeXY.hidden = !canHome || !canJog;
     const position = snapshot.position;
@@ -1822,8 +1921,8 @@ class PrinterView {
       }
     }
     this.positionEl.hidden = this.positionEl.childElementCount === 0;
-    this.motionHint.textContent =
-      (canJog || canHome) && online && this.activeJob() ? "The head cannot be moved while a job is running." : "";
+    const motionReason = (canJog && jogReason) || (canHome && homeReason) || "";
+    this.motionHint.textContent = online && motionReason ? `The head cannot be moved: ${motionReason}.` : "";
     this.motionHint.hidden = !this.motionHint.textContent;
 
     this.noControls.hidden = anyHeater || anyFan || speedShown || canJog || canHome;
@@ -1898,7 +1997,7 @@ class PrinterView {
       row.append(icon("file", 18), info);
       if (caps.includes("start_print")) {
         const print = button("icon-btn file-print", "Print", "play", "start_print");
-        print.disabled = !online || this.activeJob() || this.card.isBusy(this.entryId, "start_print");
+        print.disabled = !online || Boolean(this.blockedReason("start_print")) || this.card.isBusy(this.entryId, "start_print");
         print.addEventListener("click", () => this.printFile(file));
         row.appendChild(print);
       }
@@ -2335,6 +2434,7 @@ class Generic3DPrinterCard extends HTMLElement {
         aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center;
       }
       .camera img { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+      .camera .stream-card { width: 100%; height: 100%; display: block; --ha-card-border-radius: 0; --ha-card-box-shadow: none; }
       .camera-error { color: #bbb; font-size: 0.85rem; }
       .camera-overlay { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 6px; }
       .overlay-chip { color: #fff; font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }

@@ -20,7 +20,7 @@ from typing import Any, Final
 
 import aiohttp
 
-from .const import Capability, ProtocolId, UnsafeFeature
+from .const import Capability, ModelProfile, ProtocolId, UnsafeFeature
 from .protocols import PrinterConfig, Protocol
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,9 +29,9 @@ _LOGGER = logging.getLogger(__name__)
 ADAPTER_MODULES: Final[tuple[str, ...]] = (
     "sdcp",
     "elegoo_cc2",
+    "anycubic_kobra",
     "moonraker",
     "octoprint",
-    "prusalink",
     "duet",
     "web_only",
 )
@@ -92,6 +92,75 @@ _UNSAFE_CC2_START_PRINT: Final = UnsafeFeature(
     ),
 )
 
+_UNSAFE_KOBRA_START_PRINT: Final = UnsafeFeature(
+    id="kobra_start_print",
+    label="Allow starting a print over the network",
+    reason=(
+        "Starting a print heats and moves the printer with nobody at it. On an "
+        "Anycubic Kobra the start request is documented only for the Kobra 3, "
+        "through custom firmware; on the other models it has not been measured. "
+        "Enable this only if you accept that a print can start while the bed is not "
+        "clear."
+    ),
+    gates=frozenset({Capability.START_PRINT}),
+    evidence="the minimal print/start payload from the Rinkhals MQTT documentation, Kobra 3",
+)
+
+#: What every Kobra of the signed-handshake generation can express.
+_KOBRA_BASE: Final = frozenset(
+    {
+        Capability.START_PRINT,
+        Capability.PAUSE,
+        Capability.RESUME,
+        Capability.STOP,
+        Capability.SET_HOTEND_TEMP,
+        Capability.SET_BED_TEMP,
+        Capability.SET_FAN_SPEED,
+        Capability.SET_SPEED,
+        Capability.SET_LIGHT,
+        Capability.FILE_LIST,
+        Capability.CAMERA_STREAM,
+        Capability.FILAMENT_SLOTS,
+        Capability.SET_AUTO_REFILL,
+    }
+)
+_KOBRA_SOURCE: Final = (
+    "chrisfore/anycubic_ha_local, captured on a Kobra S1 Max and confirmed on this "
+    "model from a user's diagnostics"
+)
+
+KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
+    ModelProfile(
+        id="20030",
+        name="Anycubic Kobra X",
+        capabilities=_KOBRA_BASE | {Capability.HOME, Capability.JOG},
+        verified=True,
+        evidence=(
+            "measured on a Kobra X, firmware 2.0.1.9, with tools/acceptance_kobra.py: "
+            "handshake, reports, the built-in unit, the paged file list, the camera, "
+            "the light, a nozzle target, the part fan, home and jog. Printing, pause, "
+            "resume, stop, speed and auto-feed follow chrisfore/anycubic_ha_local and "
+            "stribor/anycubic_kobrax, not yet measured"
+        ),
+    ),
+    ModelProfile(id="20024", name="Anycubic Kobra 3", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20026", name="Anycubic Kobra 3 Max", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20027", name="Anycubic Kobra 3 V2", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(id="20028", name="Anycubic Kobra 4", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
+    ModelProfile(
+        id="20025",
+        name="Anycubic Kobra S1",
+        capabilities=_KOBRA_BASE | {Capability.CHAMBER_SENSOR},
+        evidence=_KOBRA_SOURCE,
+    ),
+    ModelProfile(
+        id="20029",
+        name="Anycubic Kobra S1 Max",
+        capabilities=_KOBRA_BASE | {Capability.CHAMBER_SENSOR},
+        evidence="captured by chrisfore/anycubic_ha_local on firmware 2.6.9.6",
+    ),
+)
+
 #: Menu entries that stand for several protocols, one per printer model. The
 #: config flow shows the family once and then asks which model, so one product
 #: line appears once in the protocol menu however its generations differ on the
@@ -114,8 +183,11 @@ class AdapterRegistration:
     fields: tuple[str, ...] = ()
     #: Credential keys this protocol needs.
     credentials: tuple[str, ...] = ()
-    #: Default TCP ports, in the order the config flow should try them.
+    #: Default TCP ports, in the order the config flow should try them. The first
+    #: one is also discovery's hint that a host may speak this protocol.
     ports: tuple[int, ...] = ()
+    #: Words whose presence on a host's web page suggests this protocol.
+    http_markers: tuple[str, ...] = ()
     #: Commands and payload shapes that need an explicit opt-in.
     unsafe: tuple[UnsafeFeature, ...] = ()
     #: What is verified and what is inferred. Shown in diagnostics.
@@ -126,6 +198,9 @@ class AdapterRegistration:
     family: str | None = None
     #: The model name shown when the user picks within the family.
     model: str | None = None
+    #: The models this protocol serves, when they differ in what they have. Empty
+    #: means one model, whose capabilities are the registration's.
+    models: tuple[ModelProfile, ...] = ()
 
 
 def _resolve(module: Any, name: str) -> type[Protocol] | None:
@@ -167,6 +242,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             ),
             fields=("port", "camera_port"),
             ports=(3030,),
+            http_markers=("elegoo",),
             unsafe=(_UNSAFE_SDCP_START_PRINT,),
             evidence={
                 "verified": (
@@ -253,6 +329,33 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             family="elegoo_centauri",
             model="Centauri Carbon 2",
         ),
+        ProtocolId.ANYCUBIC_KOBRA: AdapterRegistration(
+            id=ProtocolId.ANYCUBIC_KOBRA,
+            label="Anycubic Kobra (LAN mode)",
+            adapter=_resolve(_ADAPTER_MODULES["anycubic_kobra"], "AnycubicKobraProtocol"),  # type: ignore[arg-type]
+            capabilities=_KOBRA_BASE | {Capability.HOME, Capability.JOG, Capability.CHAMBER_SENSOR},
+            models=KOBRA_MODELS,
+            fields=("port", "serial"),
+            ports=(18910,),
+            unsafe=(_UNSAFE_KOBRA_START_PRINT,),
+            evidence={
+                "inferred": (
+                    "no Kobra has been measured by this project yet. The handshake, the "
+                    "report shapes and the print commands come from "
+                    "chrisfore/anycubic_ha_local, captured on a Kobra S1 Max; the Kobra "
+                    "X's own commands from stribor/anycubic_kobrax; the file list from "
+                    "rvanderp3/kobra-connect; starting a print from the Rinkhals "
+                    "documentation. tools/acceptance_kobra.py checks them on a printer"
+                ),
+                "absent": (
+                    "upload, because no source records the body its endpoint takes; "
+                    "deleting a file, until the file list is confirmed on a printer; "
+                    "loading and unloading filament, which the LAN protocol has no "
+                    "command for; drying, humidity and remaining filament, which the "
+                    "shared model has no field for"
+                ),
+            },
+        ),
         ProtocolId.MOONRAKER: AdapterRegistration(
             id=ProtocolId.MOONRAKER,
             label="Klipper via Moonraker",
@@ -280,6 +383,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url"),
             credentials=("api_key",),
             ports=(7125,),
+            http_markers=("moonraker", "klipper"),
             evidence={
                 "inferred": (
                     "endpoints and field names read from Moonraker's own documentation "
@@ -315,6 +419,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url", "camera_port"),
             credentials=("api_key",),
             ports=(5000, 80),
+            http_markers=("octoprint",),
             evidence={
                 "inferred": (
                     "endpoints from the OctoPrint REST API documentation and the Home "
@@ -322,32 +427,6 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "across installations, so the config flow probes it"
                 ),
                 "verified": "no layer count is exposed by the REST API, so it stays None",
-            },
-        ),
-        ProtocolId.PRUSALINK: AdapterRegistration(
-            id=ProtocolId.PRUSALINK,
-            label="PrusaLink",
-            adapter=_resolve(_ADAPTER_MODULES["prusalink"], "PrusaLinkProtocol"),  # type: ignore[arg-type]
-            capabilities=frozenset(
-                {
-                    Capability.PAUSE,
-                    Capability.RESUME,
-                    Capability.STOP,
-                    Capability.FILE_LIST,
-                    Capability.FILE_UPLOAD,
-                    Capability.WEB_UI,
-                }
-            ),
-            fields=("port", "web_url"),
-            credentials=("username", "password", "api_key"),
-            ports=(80, 443),
-            evidence={
-                "inferred": (
-                    "PrusaLink has no start-print and no set-temperature operation at all, "
-                    "which is why START_PRINT and the temperature capabilities are absent "
-                    "here rather than faked; state and job fields come from the PrusaLink "
-                    "OpenAPI description"
-                ),
             },
         ),
         ProtocolId.DUET: AdapterRegistration(
@@ -376,6 +455,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             fields=("port", "tls", "web_url"),
             credentials=("password",),
             ports=(80, 443),
+            http_markers=("duet", "reprap"),
             evidence={
                 "inferred": (
                     "the RepRapFirmware object model. Cancel needs M25 followed by M0, and "
@@ -468,6 +548,7 @@ def build_adapter(config: PrinterConfig, session: aiohttp.ClientSession) -> Prot
         session,
         granted=granted_capabilities(registration, config.unsafe_enabled),
         unsafe=withheld_features(registration, config.unsafe_enabled),
+        models=registration.models,
     )
 
 
