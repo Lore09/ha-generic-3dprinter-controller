@@ -48,6 +48,9 @@ class ProfiledProtocol(Protocol):
         return None
 
     async def _async_read(self) -> PrinterSnapshot:
+        # Like a real adapter, the first read sets the session up if nothing has.
+        if self.model_id is None:
+            await self.async_setup()
         return PrinterSnapshot(protocol=ProtocolId.WEB_ONLY, connected=True, model="wire name")
 
     async def _async_dispatch(self, command: Command, params: Mapping[str, Any]) -> None:
@@ -104,11 +107,23 @@ async def test_a_profile_never_grants_what_an_opt_in_withholds(session) -> None:
     assert Capability.SET_LIGHT not in adapter.capabilities
 
 
-async def test_an_unknown_model_keeps_everything_and_says_so(session) -> None:
+async def test_an_unknown_model_gets_what_every_known_model_has_and_says_so(session) -> None:
+    """A command one model takes can do something else on a model nobody measured."""
     adapter = ProfiledProtocol(session, "99")
     await adapter.async_setup()
     assert adapter.model_profile is None
-    assert adapter.capabilities == GRANTED
+    assert adapter.capabilities == frozenset({Capability.PAUSE})
     snapshot = await adapter.async_read()
     assert "unknown model 99" in snapshot.errors
     assert snapshot.model == "wire name"
+    assert snapshot.capabilities == frozenset({Capability.PAUSE})
+    with pytest.raises(UnsupportedCommandError):
+        await adapter.async_send(Command.HOME, axes="XYZ")
+    assert adapter.sent == []
+
+
+async def test_a_command_before_the_first_read_is_judged_on_the_model_it_finds(session) -> None:
+    adapter = ProfiledProtocol(session, "99")
+    with pytest.raises(UnsupportedCommandError):
+        await adapter.async_send(Command.HOME, axes="XYZ")
+    assert adapter.sent == []

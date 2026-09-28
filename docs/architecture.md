@@ -82,8 +82,9 @@ models have a chamber. A registration lists `ModelProfile`s, the adapter records
 the model it reached during setup, and the granted set becomes the registration's,
 narrowed to the profile, less any opt-in not granted. Setup runs before entities
 are created, so they see the narrowed set. A model the registration does not know
-keeps the whole set and its snapshot says so; a profile nobody measured is marked
-unverified on the card.
+gets only what every known model has, since a command one model takes, such as a
+Kobra X's moves, is unmeasured on another, and its snapshot says so; a profile
+nobody measured is marked unverified on the card.
 
 **State rules.** Some commands are supported but refused in some states: a
 Centauri Carbon 2 moves its head only while idle, and an Anycubic applies

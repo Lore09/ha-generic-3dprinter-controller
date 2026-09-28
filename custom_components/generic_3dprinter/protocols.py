@@ -405,10 +405,13 @@ class Protocol(ABC):
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """Return the granted capabilities, narrowed to the reached model's profile when known."""
+        """Return the granted capabilities, narrowed to the reached model's profile when known.
+        An unknown model gets only what every known model has; before setup the whole set stands."""
+        if not self._models or self._model_id is None:
+            return self._granted
         profile = self.model_profile
         if profile is None:
-            return self._granted
+            return self._granted & frozenset.intersection(*(item.capabilities for item in self._models))
         return self._granted & profile.capabilities
 
     @property
@@ -525,6 +528,9 @@ class Protocol(ABC):
         snapshot = self._last_snapshot
         if snapshot is None or command in snapshot.blocked:
             snapshot = await self.async_read()
+            # A first read can learn which model this is, and narrow what it grants.
+            if required not in snapshot.capabilities:
+                raise UnsupportedCommandError(command, required)
         reason = snapshot.blocked.get(command)
         if reason is not None:
             raise CommandBlockedError(command, reason)
