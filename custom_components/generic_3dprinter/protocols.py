@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
+import re
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlsplit
 
@@ -41,6 +42,18 @@ from .validation import ParamError, validate_params
 
 if TYPE_CHECKING:
     from .discovery import DiscoveryResult
+
+_SERIAL: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def valid_serial(serial: str) -> bool:
+    """Whether a serial is safe inside an MQTT topic.
+
+    There "/", "+" and "#" have meaning, so only what real serials are made of
+    passes: letters, digits, and the dashes a Kobra's reads F757-6C30-088E-57CA.
+    """
+    return _SERIAL.fullmatch(serial) is not None
+
 
 COMMAND_CAPABILITY: Final[Mapping[Command, Capability]] = MappingProxyType(
     {
@@ -325,10 +338,8 @@ def parse_config(
         web_url = validate_url(web_url, label="web ui url")
 
     serial = str(data.get("serial") or "").strip() or None
-    if serial is not None and (len(serial) > 64 or not serial.isalnum()):
-        # The serial becomes part of an MQTT topic, where "/", "+" and "#" have
-        # meaning, so only the letters and digits a real serial is made of pass.
-        raise ConfigError("serial number must be letters and digits only")
+    if serial is not None and not valid_serial(serial):
+        raise ConfigError("serial number must be letters, digits, '-' and '_' only")
 
     credentials: dict[str, str] = {}
     for key in CREDENTIAL_KEYS:

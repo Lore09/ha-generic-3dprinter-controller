@@ -7,6 +7,7 @@ fake that believes anything.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import aiohttp
@@ -223,8 +224,19 @@ async def test_files_are_listed_from_the_slicers_request(kobra_x, session) -> No
     finally:
         await adapter.async_teardown()
     assert [item.name for item in files] == ["benchy.gcode", "cube.gcode"]
+    assert files[0].modified is not None and files[0].modified.year == 2024
     (request,) = [item for item in kobra_x.received if item["action"] == "listLocal"]
-    assert request["_source"] == "slicer" and request["data"] == {"path": "/"}
+    assert request["_source"] == "slicer" and request["data"]["path"] == "/"
+
+
+async def test_a_refused_file_list_fails_at_once(kobra_x, session, monkeypatch) -> None:
+    monkeypatch.setattr(kobra, "FILE_LIST_REQUEST", {"path": "/"})
+    adapter = _adapter(kobra_x, session)
+    try:
+        with pytest.raises(ProtocolError, match="10112"):
+            await asyncio.wait_for(adapter.async_list_files(), timeout=kobra.FILE_LIST_TIMEOUT / 2)
+    finally:
+        await adapter.async_teardown()
 
 
 async def test_the_stream_is_started_as_the_official_client_does(kobra_x, session) -> None:

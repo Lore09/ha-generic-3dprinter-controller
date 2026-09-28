@@ -96,6 +96,7 @@ from ..protocols import (
     UnreachableError,
     job_active,
     not_idle,
+    valid_serial,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -118,6 +119,9 @@ INFO_WAIT: Final = 1.5
 #: because an idle printer drops a job setting without answering at all.
 ANSWER_WINDOW: Final = 3.0
 FILE_LIST_TIMEOUT: Final = 10.0
+#: A Kobra X 2.0.1.9 refuses ``listLocal`` without paging (10112), then lists every
+#: entry whatever the page asks for. Measured on the printer.
+FILE_LIST_REQUEST: Final = {"path": "/", "page_num": 1, "page_size": 500}
 #: Reads without a single report before the session counts as dead.
 SILENT_POLLS: Final = 4
 #: The camera: the official client stops the capture, waits, starts it, and reads
@@ -401,10 +405,13 @@ def filament_system(boxes: Mapping[int, Mapping[str, Any]]) -> FilamentSystem | 
 
 
 def parse_file_list(data: Mapping[str, Any]) -> list[FileEntry]:
-    """Normalise a ``listLocal`` answer. Entries without a name are skipped."""
-    listed = data.get("file_list")
+    """Normalise a ``listLocal`` answer. Folders and entries without a name are skipped.
+
+    A Kobra X answers with ``records``; the sources recorded ``file_list``.
+    """
+    listed = data.get("records", data.get("file_list"))
     if not isinstance(listed, Sequence) or isinstance(listed, str):
-        raise ProtocolShapeError("the printer's file list has no file_list")
+        raise ProtocolShapeError("the printer's file list has no records")
     files: list[FileEntry] = []
     for item in listed:
         if not isinstance(item, Mapping):
@@ -412,7 +419,7 @@ def parse_file_list(data: Mapping[str, Any]) -> list[FileEntry]:
         name = str(item.get("name") or item.get("filename") or "").strip()
         if not name or item.get("is_dir") or item.get("type") == "folder":
             continue
-        stamp = _number(item.get("modify_time") or item.get("create_time"))
+        stamp = _number(item.get("timestamp") or item.get("modify_time") or item.get("create_time"))
         modified = None
         if stamp:
             if stamp > 1e11:
@@ -574,7 +581,7 @@ class AnycubicKobraProtocol(Protocol):
                 f"LAN mode is {'off' if info.get('ctrlType') == 'cloud' else 'on'}",
             ],
             lan_only=info.get("ctrlType") != "cloud",
-            prefill={"serial": serial} if serial.isalnum() else {},
+            prefill={"serial": serial} if valid_serial(serial) else {},
         )
 
     @classmethod
@@ -593,7 +600,7 @@ class AnycubicKobraProtocol(Protocol):
         serial = str(info.get("cn") or "").strip()
         if config.serial and serial and serial != config.serial:
             raise ConfigError(f"the printer at {config.host} reports serial {serial}, not {config.serial}")
-        if serial.isalnum():
+        if valid_serial(serial):
             return config.with_overrides({"serial": serial})
         return config
 
@@ -721,6 +728,17 @@ class AnycubicKobraProtocol(Protocol):
             if self._video is not None and not self._video.done() and message.get("action") != "stopCapture":
                 self._video.set_result(self._stream_url)
             return
+        if kind == "file" and message.get("action") == "listLocal" and message.get("state") == "failed":
+            # The refusal carries a msgid of the printer's own, so no request matches it.
+            if self._files is not None and not self._files.done():
+                self._files.set_exception(
+                    CommandRejectedError(
+                        f"the printer refused the file list: {message.get('code')} {message.get('msg')}",
+                        code=message.get("code"),
+                        reason=message.get("msg"),
+                    )
+                )
+            return
         if not isinstance(data, Mapping):
             return
         if kind in self._awaiting:
@@ -748,7 +766,7 @@ class AnycubicKobraProtocol(Protocol):
             self._boxes = merge_boxes(self._boxes, data)
         elif kind == "peripherie":
             self._peripherie = data
-        elif kind == "file" and "file_list" in data:
+        elif kind == "file" and ("records" in data or "file_list" in data):
             if self._files is not None and not self._files.done():
                 self._files.set_result(data)
 
@@ -1040,7 +1058,7 @@ class AnycubicKobraProtocol(Protocol):
         future: asyncio.Future[Mapping[str, Any]] = asyncio.get_running_loop().create_future()
         self._files = future
         try:
-            await self._async_publish("slicer", "file", "listLocal", {"path": "/"})
+            await self._async_publish("slicer", "file", "listLocal", dict(FILE_LIST_REQUEST))
             data = await asyncio.wait_for(future, timeout=FILE_LIST_TIMEOUT)
         except TimeoutError:
             raise ProtocolError("the printer did not answer the file list") from None

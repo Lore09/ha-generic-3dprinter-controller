@@ -8,7 +8,7 @@ It answers the way the sources recorded a real printer answering:
 * reports on ``.../printer/public/<model>/<device>/<type>/report``: ``info`` with
   the whole state, ``tempature``, ``fan``, ``light``, ``multiColorBox`` for
   ``getInfo``, ``peripherie``, ``video`` with a per-session stream URL, and ``file``
-  for ``listLocal``;
+  for ``listLocal``, which needs paging as a Kobra X 2.0.1.9 was measured to;
 * a job setting sent while idle is dropped with no answer, which is what an idle
   printer does; accepted commands are answered with ``code: 200``.
 
@@ -33,7 +33,8 @@ ROOT = "anycubic/anycubicCloud/v1"
 TOKEN = "0123456789abcdefFEDCBA9876543210"
 LOCAL_TOKEN = "localtoken123456"
 DEVICE_ID = "DEV0123456789"
-SERIAL = "KX2026ABCDEF"
+# Shaped as a real Kobra X reports its cn.
+SERIAL = "F757-6C30-088E-57CA"
 READ_ACTIONS = frozenset({"query", "getInfo", "listLocal", "reportInfo"})
 
 #: A Kobra X printing, with its built-in four-slot unit.
@@ -99,9 +100,11 @@ class FakeKobraPrinter:
         self.info = copy.deepcopy(INFO)
         self.unit: dict[str, Any] = copy.deepcopy(UNIT) if with_unit else {"multi_color_box": []}
         self.lights = [{"type": 2 if model_id in ("20025", "20029") else 3, "status": 1, "brightness": 100}]
+        # As a Kobra X 2.0.1.9 lists them: milliseconds, and a folder among the files.
         self.files = [
-            {"name": "benchy.gcode", "size": 1234567, "modify_time": 1706900000},
-            {"name": "cube.gcode", "size": 42, "modify_time": 1706900100},
+            {"display_name": "Built-in Files", "fileKey": "", "filename": "test_model", "is_dir": True, "size": 0, "timestamp": 1788535566531},
+            {"display_name": "", "fileKey": "8c97", "filename": "benchy.gcode", "is_dir": False, "size": 1234567, "timestamp": 1706900000000},
+            {"display_name": "", "fileKey": "b646", "filename": "cube.gcode", "is_dir": False, "size": 42, "timestamp": 1706900100000},
         ]
         #: Every message a client published, in order.
         self.received: list[dict[str, Any]] = []
@@ -302,4 +305,9 @@ class FakeKobraPrinter:
         elif kind == "video" and action == "stopCapture":
             await self.report("video", None, action=action, state="pushStopped", code=200)
         elif kind == "file" and action == "listLocal":
-            await self.report("file", {"file_list": copy.deepcopy(self.files)}, action="listLocal", code=200)
+            # A Kobra X refuses a list without paging, under a msgid of its own, and
+            # then ignores the paging and lists everything.
+            if not {"path", "page_num", "page_size"} <= set(message.get("data") or {}):
+                await self.report("file", None, action=action, code=10112, msg="参数设定失败", state="failed")
+                return
+            await self.report("file", {"list_mode": 0, "records": copy.deepcopy(self.files)}, action=action, code=200, state="done")

@@ -113,7 +113,7 @@ def test_the_file_list_is_read_leniently_and_a_missing_list_is_an_error() -> Non
     assert [item.name for item in files] == ["benchy.gcode", "cube.gcode"]
     assert files[0].modified == files[1].modified.replace(microsecond=0)
     with pytest.raises(ProtocolShapeError):
-        kobra.parse_file_list({"records": []})
+        kobra.parse_file_list({"list_mode": 0})
 
 
 def test_speed_modes_and_jog_distances() -> None:
