@@ -109,6 +109,9 @@ TOPIC_ROOT: Final = "anycubic/anycubicCloud/v1"
 HTTP_TIMEOUT: Final = aiohttp.ClientTimeout(total=8)
 CONNECT_TIMEOUT: Final = 10.0
 KEEPALIVE: Final = 60
+#: Seconds between pings. Reads may be an hour apart, and a broker drops a client
+#: silent for one and a half keepalives.
+PING_INTERVAL: Final = KEEPALIVE / 2
 #: How long the first read after setup waits for the full ``info`` report.
 FIRST_INFO_TIMEOUT: Final = 3.0
 #: How long a later read waits for the answers to its own queries, so a command's
@@ -517,6 +520,10 @@ class AnycubicKobraProtocol(Protocol):
         super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._broker_session: Session | None = None
         self._client: MqttClient | None = None
+        #: Held while a session is opened or closed: a read, a command, the file list
+        #: and the camera all open one when it is gone, and may find it gone at once.
+        self._setup_lock = asyncio.Lock()
+        self._pinger: asyncio.Task[None] | None = None
         self._state: dict[str, Any] = {}
         self._have_info = asyncio.Event()
         #: The report types a read asked for and has not had yet, and the event set
@@ -615,9 +622,18 @@ class AnycubicKobraProtocol(Protocol):
         return self._client is not None and not self._client.closed
 
     async def async_setup(self) -> None:
-        """Run the handshake, connect over TLS and ask for every report once."""
-        if self._connected:
-            return
+        """Run the handshake, connect over TLS and ask for every report once.
+
+        One setup at a time. Two at once would each run the handshake and connect,
+        and the first connection would be left open, still folding reports in,
+        behind the second.
+        """
+        async with self._setup_lock:
+            if self._connected:
+                return
+            await self._async_open()
+
+    async def _async_open(self) -> None:
         await self._async_close()
 
         info = await fetch_info(self._session, self.config.host, self.info_port)
@@ -658,15 +674,23 @@ class AnycubicKobraProtocol(Protocol):
         self._state = {}
         self._have_info.clear()
         self._silent_reads = 0
+        self._pinger = asyncio.create_task(self._async_ping(client))
         try:
             await client.subscribe(
                 [f"{TOPIC_ROOT}/printer/public/{session.model_id}/{session.device_id}/#"]
             )
             await self._async_query("peripherie")
             await self._async_query_all()
-        except MqttError as err:
+        except (MqttError, UnreachableError) as err:
             await self._async_close()
             raise UnreachableError(f"the printer broke off the session: {err}") from err
+
+    async def _async_ping(self, client: MqttClient) -> None:
+        """Keep the broker's session alive between reads, for as long as it is open."""
+        while not client.closed:
+            await asyncio.sleep(PING_INTERVAL)
+            with suppress(MqttError):
+                await client.ping()
 
     async def _async_ctrl(self, info: Mapping[str, Any]) -> tuple[str, str]:
         """Sign the control request and return the encrypted bundle and its IV."""
@@ -692,15 +716,27 @@ class AnycubicKobraProtocol(Protocol):
         return str(data["info"]), str(data.get("token") or "")
 
     async def async_teardown(self) -> None:
-        """Stop the camera if this session started it, and close the session."""
-        if self._capturing and self._connected:
-            with suppress(ProtocolError, MqttError):
-                await self._async_publish("web", "video", "stopCapture")
-        await self._async_close()
+        """Stop the camera if this session started it, and close the session.
+
+        A setup in flight is waited for, or its connection would open after the
+        close and outlive the entry.
+        """
+        async with self._setup_lock:
+            if self._capturing and self._connected:
+                with suppress(ProtocolError, MqttError):
+                    await self._async_publish("web", "video", "stopCapture")
+            await self._async_close()
 
     async def _async_close(self) -> None:
         client, self._client = self._client, None
+        pinger, self._pinger = self._pinger, None
         self._capturing = False
+        # The stream's URL carries a token of the session it was started in.
+        self._stream_url = None
+        if pinger is not None:
+            pinger.cancel()
+            with suppress(asyncio.CancelledError):
+                await pinger
         if client is not None:
             await client.close()
         for future in (*self._answers.values(), self._files, self._video):

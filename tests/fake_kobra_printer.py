@@ -132,6 +132,11 @@ class FakeKobraPrinter:
         return len(self._broker.sessions)
 
     @property
+    def pings(self) -> int:
+        """Return how many keepalive pings the broker has had."""
+        return self._broker.pings
+
+    @property
     def commands(self) -> list[dict[str, Any]]:
         """Return every message that asked the printer to do something."""
         return [
