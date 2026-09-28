@@ -159,3 +159,12 @@ async def test_a_still_reuses_the_running_stream_and_restarts_a_dead_one(
     with patch(target, AsyncMock(side_effect=[None, b"\xff\xd8again"])):
         assert await camera.async_camera_image() == b"\xff\xd8again"
     assert adapter.starts == 2
+
+
+async def test_a_still_reads_only_the_start_of_a_live_stream(hass: HomeAssistant) -> None:
+    """With ffmpeg's default probe a Kobra X's live FLV gives no still before the timeout."""
+    from custom_components.generic_3dprinter.camera import async_still_from_stream
+
+    with patch("homeassistant.components.ffmpeg.async_get_image", AsyncMock(return_value=b"jpeg")) as grab:
+        assert await async_still_from_stream(hass, STREAM_URL, None, None) == b"jpeg"
+    assert grab.await_args.args[1] == f"-probesize 32768 -i {STREAM_URL}"

@@ -18,6 +18,7 @@ upstream connection between viewers the same way, and its stills come from ffmpe
 from __future__ import annotations
 
 import logging
+import shlex
 
 from aiohttp import web
 from homeassistant.components.camera import Camera, CameraEntityFeature
@@ -36,6 +37,10 @@ _LOGGER = logging.getLogger(__name__)
 #: builds from stills. Five frames a second is smooth enough to watch a print and
 #: cheap enough not to saturate a single-slot camera server.
 FRAME_INTERVAL = 0.2
+#: Bytes ffmpeg reads to recognise a live stream before decoding it. By default it
+#: reads so much of a Kobra X's live FLV that a still times out without a frame;
+#: with this it has one in about two seconds. Measured on firmware 2.0.1.9.
+STILL_PROBESIZE = 32768
 
 
 async def async_still_from_stream(
@@ -49,7 +54,9 @@ async def async_still_from_stream(
     """
     from homeassistant.components import ffmpeg
 
-    return await ffmpeg.async_get_image(hass, source, width=width, height=height)
+    # ffmpeg's helper takes a whole input string in place of a bare source.
+    command = f"-probesize {STILL_PROBESIZE} -i {shlex.quote(source)}"
+    return await ffmpeg.async_get_image(hass, command, width=width, height=height)
 
 
 async def async_setup_entry(
