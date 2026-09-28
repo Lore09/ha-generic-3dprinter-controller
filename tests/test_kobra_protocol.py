@@ -171,6 +171,7 @@ async def test_an_s1_has_a_chamber_and_a_chamber_light(session) -> None:
 
 
 async def test_an_unknown_model_keeps_working_and_says_so(session) -> None:
+    """It is read, but never sent the Kobra X's moves, which nobody measured on it."""
     printer = await _printer(model_id="20099")
     adapter = _adapter(printer, session)
     try:
@@ -181,6 +182,8 @@ async def test_an_unknown_model_keeps_working_and_says_so(session) -> None:
         printer.close()
     assert "unknown model 20099" in snapshot.errors
     assert snapshot.print_state is PrintState.PRINTING
+    assert Capability.PAUSE in snapshot.capabilities
+    assert not {Capability.HOME, Capability.JOG, Capability.CHAMBER_SENSOR} & snapshot.capabilities
 
 
 async def test_a_refusal_is_reported_with_the_printers_code(kobra_x, session) -> None:

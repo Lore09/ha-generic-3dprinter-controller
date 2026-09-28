@@ -423,12 +423,16 @@ class Protocol(ABC):
         """Return the capabilities this printer grants, after every gate.
 
         Narrowed to the model's profile when the adapter has reported a model its
-        registration knows. An unknown model keeps the registration's whole set,
-        and the snapshot says the model is unknown.
+        registration knows. A model it does not know gets only what every known
+        model has, because a command one model takes, such as a Kobra X's moves,
+        is unmeasured on another; the snapshot says the model is unknown. Before
+        the adapter has reported a model, the registration's whole set stands.
         """
+        if not self._models or self._model_id is None:
+            return self._granted
         profile = self.model_profile
         if profile is None:
-            return self._granted
+            return self._granted & frozenset.intersection(*(item.capabilities for item in self._models))
         return self._granted & profile.capabilities
 
     @property
@@ -571,6 +575,9 @@ class Protocol(ABC):
         snapshot = self._last_snapshot
         if snapshot is None or command in snapshot.blocked:
             snapshot = await self.async_read()
+            # A first read can learn which model this is, and narrow what it grants.
+            if required not in snapshot.capabilities:
+                raise UnsupportedCommandError(command, required)
         reason = snapshot.blocked.get(command)
         if reason is not None:
             raise CommandBlockedError(command, reason)
