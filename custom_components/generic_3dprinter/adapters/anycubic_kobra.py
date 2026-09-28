@@ -15,12 +15,13 @@ broker credentials:
   and commands go to ``.../web/printer/<model>/<device>/<type>``, except starting a
   print and listing files, which use the slicer's ``.../slicer/...`` prefix.
 
-Sources, all read rather than measured by this project: chrisfore/anycubic_ha_local,
+Sources, read rather than measured: chrisfore/anycubic_ha_local,
 whose protocol notes were captured on a Kobra S1 Max and whose Kobra X support was
 confirmed from a user's diagnostics; stribor/anycubic_kobrax, written by a Kobra X
 owner, for the Kobra X's own command shapes; rvanderp3/kobra-connect for the file
-list; and the Rinkhals documentation for starting a print. The registry's evidence
-says which are measured once a printer has been checked.
+list; and the Rinkhals documentation for starting a print. What a Kobra X on
+firmware 2.0.1.9 confirmed is in the registry's evidence and in
+``docs/protocol-anycubic-kobra.md``.
 
 Four facts shape the adapter.
 

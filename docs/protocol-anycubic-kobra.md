@@ -4,9 +4,10 @@ The Kobra 3, Kobra 4, Kobra S1 and Kobra X speak one LAN protocol: a signed HTTP
 handshake that hands out credentials, then JSON over MQTT with TLS. The adapter is
 `adapters/anycubic_kobra.py`; the hardware check is `tools/acceptance_kobra.py`.
 
-**Nothing here has been measured by this project yet.** Everything is taken from a
-source, named each time. When a printer has been checked, this document records
-what it answered, the way `protocol-elegoo-cc2.md` does for the Centauri Carbon 2.
+**Only a Kobra X has been measured by this project**, on firmware 2.0.1.9, and only
+in part: *Measured on a Kobra X* below records what it answered, the way
+`protocol-elegoo-cc2.md` does for the Centauri Carbon 2. Everything else is taken
+from a source, named each time.
 
 Sources, in order of authority:
 
@@ -61,7 +62,7 @@ their type, never by `action`, which varies (1).
 | `multiColorBox` | `getInfo` | the multi-colour units; not pushed while printing |
 | `peripherie` | `query` | whether a camera and a unit are attached |
 | `video` | answer to `startCapture` | the stream URL |
-| `file` | answer to `listLocal` | `file_list` |
+| `file` | answer to `listLocal` | `records` on a Kobra X 2.0.1.9, `file_list` in (3) |
 
 `project.pause` is the authoritative pause flag: 0 running, 1 paused, 2 pausing,
 3 resuming, 4 stopping. `remain_time` is in minutes. `stoped` is the firmware's
@@ -80,7 +81,7 @@ spelling (1).
 | jog | `axis` / `move`, `{axis: 1 X, 2 Y, 3 Z, move_type: 1 plus or 0 minus, distance}` (2) | none |
 | auto-feed | `multiColorBox` / `setAutoFeed` (1) | same |
 | start print | `slicer/` `print` / `start`, `{taskid: "-1", filename, filetype: 1}` (4); an opt-in | same |
-| file list | `slicer/` `file` / `listLocal`, `{path: "/"}` (3) | same |
+| file list | `slicer/` `file` / `listLocal`, `{path: "/", page_num, page_size}`; a Kobra X refuses it without paging, measured | `{path: "/"}` (3) |
 
 A refusal comes back on the type's report topic with a `code` other than 200. An
 idle printer drops a job setting without any answer (1), which is why those are
@@ -146,7 +147,7 @@ Firmware 2.0.1.9, model id 20030, with `tools/acceptance_kobra.py`:
 
 ## Still to verify
 
-Starting, pausing, resuming and stopping a print, the speed and auto-feed on the
-Kobra X, and every other model. `tools/acceptance_kobra.py <host>` reads a printer without changing it;
+Starting, pausing, resuming and stopping a print, the speed, auto-feed, homing Z or
+all axes and jogging Y or Z on the Kobra X, and every other model. `tools/acceptance_kobra.py <host>` reads a printer without changing it;
 `--camera out.flv` checks the stream; `--active` sends the light, a nozzle target,
 the part fan and, on a Kobra X, a home and a jog, each confirmed first.

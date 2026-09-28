@@ -138,9 +138,10 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
         evidence=(
             "measured on a Kobra X, firmware 2.0.1.9, with tools/acceptance_kobra.py: "
             "handshake, reports, the built-in unit, the paged file list, the camera, "
-            "the light, a nozzle target, the part fan, home and jog. Printing, pause, "
-            "resume, stop, speed and auto-feed follow chrisfore/anycubic_ha_local and "
-            "stribor/anycubic_kobrax, not yet measured"
+            "the light, a nozzle target, the part fan, homing X and Y and a jog of X. "
+            "Printing, pause, resume, stop, speed, auto-feed, homing Z and the other "
+            "jogs follow chrisfore/anycubic_ha_local and stribor/anycubic_kobrax, not "
+            "yet measured"
         ),
     ),
     ModelProfile(id="20024", name="Anycubic Kobra 3", capabilities=_KOBRA_BASE, evidence=_KOBRA_SOURCE),
@@ -339,8 +340,13 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             ports=(18910,),
             unsafe=(_UNSAFE_KOBRA_START_PRINT,),
             evidence={
+                "verified": (
+                    "on a Kobra X, firmware 2.0.1.9: the handshake, the TLS broker, the "
+                    "reports, the built-in unit, the paged file list, the camera, the "
+                    "light, a nozzle target, the part fan, homing X and Y and a jog of X"
+                ),
                 "inferred": (
-                    "no Kobra has been measured by this project yet. The handshake, the "
+                    "everything else, and every other model. The handshake, the "
                     "report shapes and the print commands come from "
                     "chrisfore/anycubic_ha_local, captured on a Kobra S1 Max; the Kobra "
                     "X's own commands from stribor/anycubic_kobrax; the file list from "
