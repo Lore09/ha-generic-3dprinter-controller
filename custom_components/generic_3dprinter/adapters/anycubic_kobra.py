@@ -309,6 +309,10 @@ def state_for(state: Mapping[str, Any]) -> PrintState:
     if raw == "free":
         return PrintState.IDLE
     project = _mapping(state.get("project"))
+    if not project:
+        # A Kobra X homing or moving reports "busy" with no project, measured on
+        # 2.0.1.9. Busy without a job is preparing, as the CC2 and Duet say it.
+        return PrintState.PREPARING
     if _integer(project.get("pause")) in PAUSED_FLAGS:
         return PrintState.PAUSED
     phase = str(project.get("state") or "")

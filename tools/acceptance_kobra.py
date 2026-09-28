@@ -171,6 +171,12 @@ async def run(args: argparse.Namespace) -> int:
                 after = await adapter.async_read()
                 report.check(label, True, f"state {after.print_state.value}, nozzle target {after.hotend.target}, fan {after.fans.model}, lights {sorted(item.value for item in after.lights)}")
 
+            async def settle(seconds: float = 30) -> None:
+                # A Kobra X reports busy while it moves, and refuses the next move until idle.
+                deadline = time.monotonic() + seconds
+                while (await adapter.async_read()).print_state.value != "idle" and time.monotonic() < deadline:
+                    await asyncio.sleep(1)
+
             await attempt("light off", Command.SET_LIGHT, on=False)
             await attempt("light on", Command.SET_LIGHT, on=True)
             await attempt("nozzle target 50", Command.SET_HOTEND_TEMP, value=50)
@@ -179,7 +185,9 @@ async def run(args: argparse.Namespace) -> int:
             await attempt("part fan 0 %", Command.SET_FAN_SPEED, value=0)
             if adapter.kobra_x:
                 await attempt("home X and Y", Command.HOME, axes="XY")
+                await settle()
                 await attempt("jog X +10 mm", Command.JOG, axis="X", distance=10)
+                await settle()
                 await attempt("jog X -10 mm", Command.JOG, axis="X", distance=-10)
         finally:
             await adapter.async_teardown()

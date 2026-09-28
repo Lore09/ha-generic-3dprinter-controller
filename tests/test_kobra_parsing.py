@@ -65,6 +65,8 @@ def test_the_session_keeps_the_users_address_and_the_printers_port() -> None:
         ({"state": "busy", "project": {"state": "stoped"}}, PrintState.CANCELLED),
         ({"state": "busy", "project": {"state": "finished"}}, PrintState.FINISHED),
         ({"state": "busy", "project": {"state": "something new"}}, PrintState.PRINTING),
+        # A Kobra X homing, as measured.
+        ({"state": "busy", "project": None}, PrintState.PREPARING),
     ],
 )
 def test_the_state_table(state: dict, expected: PrintState) -> None:
