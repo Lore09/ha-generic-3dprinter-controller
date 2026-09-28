@@ -279,3 +279,52 @@ async def test_a_silent_printer_is_dropped_and_a_new_session_is_made(kobra_x, se
         await adapter.async_teardown()
     assert snapshot.connected
     assert kobra_x.handshakes == 2, "each session gets its own credentials"
+
+
+async def _until(condition, timeout: float = 2.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not condition():
+            await asyncio.sleep(0.01)
+
+
+async def test_setups_at_once_open_one_session(kobra_x, session) -> None:
+    """A read, a command and the camera can all find the session gone at the same moment."""
+    adapter = _adapter(kobra_x, session)
+    try:
+        await asyncio.gather(*(adapter.async_setup() for _ in range(3)))
+        assert (kobra_x.handshakes, kobra_x.sessions) == (1, 1)
+    finally:
+        await adapter.async_teardown()
+
+
+async def test_a_teardown_waits_for_a_setup_in_flight(kobra_x, session) -> None:
+    """Otherwise the setup connects after the close, and the session outlives the entry."""
+    adapter = _adapter(kobra_x, session)
+    setup = asyncio.create_task(adapter.async_setup())
+    await asyncio.sleep(0)
+    await adapter.async_teardown()
+    await setup
+    await _until(lambda: kobra_x.sessions == 0)
+
+
+async def test_the_session_is_kept_alive_between_reads(kobra_x, session, monkeypatch) -> None:
+    """Reads can be an hour apart, and a broker drops a client silent for longer than its keepalive."""
+    monkeypatch.setattr(kobra, "PING_INTERVAL", 0.05)
+    adapter = _adapter(kobra_x, session)
+    try:
+        await adapter.async_setup()
+        await _until(lambda: kobra_x.pings >= 2)
+    finally:
+        await adapter.async_teardown()
+
+
+async def test_a_new_session_never_plays_the_last_ones_stream(kobra_x, session) -> None:
+    """The stream's URL carries a token of the session that started it."""
+    adapter = _adapter(kobra_x, session)
+    try:
+        assert (await adapter.async_stream_source()).endswith("/live/token1")
+        await adapter.async_teardown()
+        kobra_x.refuse[("video", "startCapture")] = 10001
+        assert await adapter.async_stream_source() == "http://127.0.0.1:18088/flv"
+    finally:
+        await adapter.async_teardown()

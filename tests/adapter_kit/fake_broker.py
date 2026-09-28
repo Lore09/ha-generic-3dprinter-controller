@@ -142,6 +142,8 @@ class FakeBroker:
         self.port = 0
         #: CONNECT packets received, accepted or not.
         self.connects = 0
+        #: PINGREQ packets received.
+        self.pings = 0
         self.sessions: set[BrokerSession] = set()
         self._server: asyncio.base_events.Server | None = None
         self._tempdir: tempfile.TemporaryDirectory[str] | None = None
@@ -204,6 +206,7 @@ class FakeBroker:
                     topic, payload, _qos, _id = decode_publish(flags, body)
                     await self._on_publish(session, topic, payload)
                 elif kind == PINGREQ:
+                    self.pings += 1
                     await session.send(packet(PINGRESP, 0))
                 elif kind == DISCONNECT:
                     return
