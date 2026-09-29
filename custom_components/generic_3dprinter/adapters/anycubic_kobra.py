@@ -114,7 +114,6 @@ SPEED_PERCENT_BY_MODE: Final[Mapping[int, float]] = MappingProxyType({1: 50.0, 2
 
 #: ``project.state`` while the printer is busy.
 PREPARING_STATES: Final = frozenset({"preheating", "auto_leveling", "vibrating", "flow_calibrating"})
-PRINTING_STATES: Final = frozenset({"printing", "resuming", "resumed", "updated"})
 CANCELLED_STATES: Final = frozenset({"stopping", "stoped", "stopped"})
 #: ``project.pause``: 0 running, 1 paused, 2 pausing, 3 resuming, 4 stopping.
 PAUSED_FLAGS: Final = frozenset({1, 2})
@@ -137,16 +136,12 @@ def sign(token: str, ts: int, nonce: str) -> str:
     return hashlib.md5((first + str(ts) + nonce).encode()).hexdigest()  # noqa: S324
 
 
-def _aes_key_iv(token: str, local_token: str) -> tuple[bytes, bytes]:
-    return token[16:32].encode(), local_token.encode()[:16].ljust(16, b"\0")
-
-
 def decrypt_bundle(info_b64: str, token: str, local_token: str) -> dict[str, Any]:
     """Decrypt the ``/ctrl`` answer: AES-CBC, key ``token[16:32]``, IV the local token."""
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     from cryptography.hazmat.primitives.padding import PKCS7
 
-    key, iv = _aes_key_iv(token, local_token)
+    key, iv = token[16:32].encode(), local_token.encode()[:16].ljust(16, b"\0")
     try:
         decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
         padded = decryptor.update(base64.b64decode(info_b64)) + decryptor.finalize()
@@ -158,18 +153,6 @@ def decrypt_bundle(info_b64: str, token: str, local_token: str) -> dict[str, Any
     if not isinstance(bundle, dict):
         raise ProtocolShapeError("the printer's session bundle is not an object")
     return bundle
-
-
-def encrypt_bundle(bundle: Mapping[str, Any], token: str, local_token: str) -> str:
-    """Encrypt a bundle the way the printer does. Used by the test suite's fake."""
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives.padding import PKCS7
-
-    key, iv = _aes_key_iv(token, local_token)
-    padder = PKCS7(128).padder()
-    padded = padder.update(json.dumps(dict(bundle)).encode()) + padder.finalize()
-    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-    return base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode()
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,16 +309,12 @@ def merge_boxes(
     return merged
 
 
-def unit_numbers(boxes: Mapping[int, Mapping[str, Any]]) -> dict[int, int]:
-    """Number the units from 0: the built-in one first, then the attached ones."""
-    return {box_id: number for number, box_id in enumerate(sorted(boxes))}
-
-
 def filament_system(boxes: Mapping[int, Mapping[str, Any]]) -> FilamentSystem | None:
     """Return the units as the shared model has them, or ``None`` with none attached."""
     if not boxes:
         return None
-    numbers = unit_numbers(boxes)
+    # Units are numbered from 0: the built-in one (id -1) first, then the attached ones.
+    numbers = {box_id: number for number, box_id in enumerate(sorted(boxes))}
     units: list[FilamentUnit] = []
     auto_feed: bool | None = None
     for box_id in sorted(boxes):
@@ -738,12 +717,12 @@ class AnycubicKobraProtocol(Protocol):
     # --------------------------------------------------------------- requests
 
     async def _async_publish(
-        self, source: str, kind: str, action: str, data: Any = None
+        self, source: str, kind: str, action: str, data: Any = None, *, body: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         client = self._client
         if client is None or client.closed:
             raise UnreachableError("the session with the printer is not open")
-        body = message(kind, action, data)
+        body = body or message(kind, action, data)
         try:
             await client.publish(self._topic(source, kind), json.dumps(body, separators=(",", ":")).encode())
         except MqttError as err:
@@ -773,16 +752,11 @@ class AnycubicKobraProtocol(Protocol):
         keys = (body["msgid"], f"{kind}/{action}")
         for key in keys:
             self._answers[key] = future
-        client = self._client
         try:
-            if client is None:
-                raise UnreachableError("the session with the printer is not open")
-            await client.publish(self._topic(source, kind), json.dumps(body, separators=(",", ":")).encode())
+            await self._async_publish(source, kind, action, body=body)
             answer = await asyncio.wait_for(asyncio.shield(future), timeout=ANSWER_WINDOW)
         except TimeoutError:
             return
-        except MqttError as err:
-            raise UnreachableError(f"cannot send to the printer: {err}") from err
         finally:
             for key in keys:
                 if self._answers.get(key) is future:
@@ -903,15 +877,6 @@ class AnycubicKobraProtocol(Protocol):
     async def _async_job(self, action: str) -> None:
         await self._async_command("print", action, {"taskid": "-1"})
 
-    async def _async_pause(self, _params: Mapping[str, Any]) -> None:
-        await self._async_job("pause")
-
-    async def _async_resume(self, _params: Mapping[str, Any]) -> None:
-        await self._async_job("resume")
-
-    async def _async_stop(self, _params: Mapping[str, Any]) -> None:
-        await self._async_job("stop")
-
     async def _async_job_setting(self, settings: Mapping[str, Any]) -> None:
         await self._async_command("print", "update", {"taskid": "-1", "settings": dict(settings)})
 
@@ -1030,7 +995,6 @@ class AnycubicKobraProtocol(Protocol):
         """Restart the capture as the official client does, and return the stream URL it reports."""
         if not self._connected:
             await self.async_setup()
-        self._video = asyncio.get_running_loop().create_future()
         try:
             await self._async_publish("web", "video", "stopCapture")
             await asyncio.sleep(CAPTURE_KICK_DELAY)
@@ -1053,9 +1017,9 @@ class AnycubicKobraProtocol(Protocol):
 #: ``Command`` to handler.
 _DISPATCH: Final[Mapping[Command, Any]] = MappingProxyType(
     {
-        Command.PAUSE: AnycubicKobraProtocol._async_pause,
-        Command.RESUME: AnycubicKobraProtocol._async_resume,
-        Command.STOP: AnycubicKobraProtocol._async_stop,
+        Command.PAUSE: lambda self, _params: self._async_job("pause"),
+        Command.RESUME: lambda self, _params: self._async_job("resume"),
+        Command.STOP: lambda self, _params: self._async_job("stop"),
         Command.SET_HOTEND_TEMP: AnycubicKobraProtocol._async_set_hotend_temp,
         Command.SET_BED_TEMP: AnycubicKobraProtocol._async_set_bed_temp,
         Command.SET_FAN_SPEED: AnycubicKobraProtocol._async_set_fan,

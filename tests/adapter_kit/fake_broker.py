@@ -183,11 +183,6 @@ class FakeBroker:
             if any(topic_matches(pattern, topic) for pattern in session.topics):
                 await session.send(data)
 
-    def drop_all(self) -> None:
-        """Cut every client off without stopping the broker, as a flaky network does."""
-        for session in list(self.sessions):
-            session.writer.close()
-
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         session = BrokerSession(writer)
         try:

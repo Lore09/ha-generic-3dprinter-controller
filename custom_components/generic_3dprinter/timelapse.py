@@ -204,10 +204,38 @@ def _write(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
-class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
-    """Whether each print is recorded as a timelapse. Off by default, and remembered."""
+class _Setting(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
+    """A switch holding one of this integration's own settings: restored, always available."""
 
     _attr_entity_category = EntityCategory.CONFIG
+
+    def _set(self, on: bool) -> None:
+        raise NotImplementedError
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the setting as it was left."""
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            self._set(last.state == "on")
+
+    @property
+    def available(self) -> bool:
+        """A setting stays available while the printer is off."""
+        return True
+
+    async def async_turn_on(self, **kwargs: object) -> None:
+        """Turn the setting on."""
+        self._set(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: object) -> None:
+        """Turn the setting off."""
+        self._set(False)
+        self.async_write_ha_state()
+
+
+class TimelapseSwitch(_Setting):
+    """Whether each print is recorded as a timelapse. Off by default."""
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
         """Record from the printer's camera entity."""
@@ -221,22 +249,14 @@ class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
         self.timelapse = Timelapse(coordinator.hass, runtime.config.name, runtime.camera_entity_id, set_light)
         self._attr_is_on = False
 
-    async def async_added_to_hass(self) -> None:
-        """Restore the switch as it was left."""
-        await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()) is not None:
-            self._attr_is_on = last.state == "on"
+    def _set(self, on: bool) -> None:
+        self._attr_is_on = on
 
     @callback
     def _handle_coordinator_update(self) -> None:
         if self._attr_is_on and self.coordinator.data is not None:
             self.timelapse.observe(self.coordinator.data)
         super()._handle_coordinator_update()
-
-    @property
-    def available(self) -> bool:
-        """A setting stays available while the printer is off."""
-        return True
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -249,23 +269,15 @@ class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
             "last_media_content_id": self.timelapse.media_content_id(last) if last else None,
         }
 
-    async def async_turn_on(self, **kwargs: object) -> None:
-        """Record from the next frame due."""
-        self._attr_is_on = True
-        self.async_write_ha_state()
-
     async def async_turn_off(self, **kwargs: object) -> None:
         """Stop recording, and make a video of what the current job has so far."""
-        self._attr_is_on = False
-        self.async_write_ha_state()
+        await super().async_turn_off()
         await self.timelapse.async_finish()
         self.async_write_ha_state()
 
 
-class TimelapseLightSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
+class TimelapseLightSwitch(_Setting):
     """Whether a timelapse lights a job that starts in the dark, and turns it off after."""
-
-    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: PrinterCoordinator, timelapse: Timelapse) -> None:
         """Set the option on the printer's timelapse."""
@@ -273,28 +285,10 @@ class TimelapseLightSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
         self.entity_description = SwitchEntityDescription(key="timelapse_light", icon="mdi:lightbulb-auto")
         self.timelapse = timelapse
 
-    async def async_added_to_hass(self) -> None:
-        """Restore the option as it was left."""
-        await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()) is not None:
-            self.timelapse.with_light = last.state == "on"
-
-    @property
-    def available(self) -> bool:
-        """A setting stays available while the printer is off."""
-        return True
+    def _set(self, on: bool) -> None:
+        self.timelapse.with_light = on
 
     @property
     def is_on(self) -> bool:
         """Return whether the option is set."""
         return self.timelapse.with_light
-
-    async def async_turn_on(self, **kwargs: object) -> None:
-        """Light the next job that starts in the dark."""
-        self.timelapse.with_light = True
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs: object) -> None:
-        """Leave the light alone."""
-        self.timelapse.with_light = False
-        self.async_write_ha_state()

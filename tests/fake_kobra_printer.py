@@ -6,12 +6,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import base64
 from contextlib import suppress
 from typing import Any
 
 from aiohttp import web
 
-from custom_components.generic_3dprinter.adapters.anycubic_kobra import encrypt_bundle
 from tests.adapter_kit.fake_broker import BrokerSession, FakeBroker
 
 ROOT = "anycubic/anycubicCloud/v1"
@@ -73,6 +73,19 @@ UNIT: dict[str, Any] = {
         }
     ],
 }
+
+
+
+def encrypt_bundle(bundle: dict[str, Any], token: str, local_token: str) -> str:
+    """Encrypt a session bundle the way the printer does."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.padding import PKCS7
+
+    key, iv = token[16:32].encode(), local_token.encode()[:16].ljust(16, b"\0")
+    padder = PKCS7(128).padder()
+    padded = padder.update(json.dumps(dict(bundle)).encode()) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    return base64.b64encode(encryptor.update(padded) + encryptor.finalize()).decode()
 
 
 class FakeKobraPrinter:

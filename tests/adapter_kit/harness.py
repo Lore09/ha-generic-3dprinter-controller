@@ -160,24 +160,6 @@ async def _http_harness(
 
 
 @asynccontextmanager
-async def moonraker_harness(
-    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AdapterHarness]:
-    """Klipper through Moonraker, printing."""
-    async with _http_harness(ProtocolId.MOONRAKER, session) as harness:
-        yield harness
-
-
-@asynccontextmanager
-async def octoprint_harness(
-    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AdapterHarness]:
-    """OctoPrint, printing."""
-    async with _http_harness(ProtocolId.OCTOPRINT, session) as harness:
-        yield harness
-
-
-@asynccontextmanager
 async def _duet_server(protocol: ProtocolId, session: aiohttp.ClientSession) -> AsyncIterator[AdapterHarness]:
     from tests.test_adapters_duet_web import FakePrinter, printer_server
 
@@ -202,24 +184,6 @@ async def _duet_server(protocol: ProtocolId, session: aiohttp.ClientSession) -> 
             wire=lambda: len(printer.gcode_requests),
             connections=lambda: None,
         )
-
-
-@asynccontextmanager
-async def duet_harness(
-    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AdapterHarness]:
-    """A Duet board over its HTTP API."""
-    async with _duet_server(ProtocolId.DUET, session) as harness:
-        yield harness
-
-
-@asynccontextmanager
-async def web_only_harness(
-    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[AdapterHarness]:
-    """A printer that is only a web page."""
-    async with _duet_server(ProtocolId.WEB_ONLY, session) as harness:
-        yield harness
 
 
 @asynccontextmanager
@@ -264,8 +228,8 @@ HARNESSES: dict[ProtocolId, HarnessFactory] = {
     ProtocolId.SDCP_CC1: sdcp_harness,
     ProtocolId.ELEGOO_CC2: cc2_harness,
     ProtocolId.ANYCUBIC_KOBRA: kobra_harness,
-    ProtocolId.MOONRAKER: moonraker_harness,
-    ProtocolId.OCTOPRINT: octoprint_harness,
-    ProtocolId.DUET: duet_harness,
-    ProtocolId.WEB_ONLY: web_only_harness,
+    ProtocolId.MOONRAKER: lambda session, _: _http_harness(ProtocolId.MOONRAKER, session),
+    ProtocolId.OCTOPRINT: lambda session, _: _http_harness(ProtocolId.OCTOPRINT, session),
+    ProtocolId.DUET: lambda session, _: _duet_server(ProtocolId.DUET, session),
+    ProtocolId.WEB_ONLY: lambda session, _: _duet_server(ProtocolId.WEB_ONLY, session),
 }

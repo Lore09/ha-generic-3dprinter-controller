@@ -922,13 +922,13 @@ class FilamentDialog {
     this.actions.hidden = !canLoad && !canUnload && !canEdit;
 
     let note = "";
+    const slotReason = this.view.firstBlocked(["load_filament", "unload_filament", "set_filament"]);
     if (!canLoad && !canUnload && !canEdit) {
       note = "This printer reports what is in each slot. Loading, unloading and changing a slot are done on its own screen.";
     } else if (!online) {
       note = "The printer is not answering.";
-    } else if (this.view.firstBlocked(["load_filament", "unload_filament", "set_filament"])) {
-      const reason = this.view.firstBlocked(["load_filament", "unload_filament", "set_filament"]);
-      note = `The slots cannot be changed now: ${reason}.`;
+    } else if (slotReason) {
+      note = `The slots cannot be changed now: ${slotReason}.`;
     } else if (!slot.loaded && canLoad) {
       note = "Put a spool in this slot to load it.";
     } else {
@@ -1373,8 +1373,7 @@ class PrinterView {
 
   /** Why the printer refuses `command` now, or null. The backend owns these rules. */
   blockedReason(command) {
-    const blocked = this.snapshot.blocked || {};
-    return blocked[command] || null;
+    return (this.snapshot.blocked || {})[command] || null;
   }
 
   /** Return the first reason among `commands` the printer refuses now, or "". */

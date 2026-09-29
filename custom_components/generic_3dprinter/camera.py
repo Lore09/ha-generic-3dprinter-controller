@@ -51,13 +51,11 @@ async def async_setup_entry(
         async_add_entities([Generic3DPrinterCamera(coordinator)])
 
 
-class Generic3DPrinterCamera(Camera):
-    """A camera serving the frames this integration proxies, named after its printer."""
+class _PrinterCamera(Camera):
+    """A printer's camera, named after the printer and available while it answers."""
 
     _attr_has_entity_name = False
     _attr_should_poll = False
-    _attr_frame_interval = FRAME_INTERVAL
-    _attr_is_streaming = True
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
         """Bind the camera to its coordinator and its printer's device."""
@@ -77,6 +75,13 @@ class Generic3DPrinterCamera(Camera):
     def available(self) -> bool:
         """Return ``False`` while the coordinator's last poll failed."""
         return self._coordinator.last_update_success
+
+
+class Generic3DPrinterCamera(_PrinterCamera):
+    """A camera serving the frames this integration proxies."""
+
+    _attr_frame_interval = FRAME_INTERVAL
+    _attr_is_streaming = True
 
     @property
     def is_streaming(self) -> bool:
@@ -106,33 +111,16 @@ class Generic3DPrinterCamera(Camera):
         return await async_proxy_mjpeg_stream(request, self.runtime)
 
 
-class Generic3DPrinterStreamCamera(Camera):
+class Generic3DPrinterStreamCamera(_PrinterCamera):
     """A printer camera that is a native video stream, played by Home Assistant."""
 
-    _attr_has_entity_name = False
-    _attr_should_poll = False
     _attr_supported_features = CameraEntityFeature.STREAM
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
-        """Bind the camera to its coordinator and its printer's device."""
-        super().__init__()
-        self._coordinator = coordinator
-        runtime = coordinator.runtime
-        self._attr_name = runtime.config.name
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_camera"
-        self._attr_device_info = async_device_info(runtime)
+        """Bind the camera, with no stream started yet."""
+        super().__init__(coordinator)
         #: The URL the last start handed out, which a still reuses while it plays.
         self._source: str | None = None
-
-    @property
-    def runtime(self) -> PrinterRuntime:
-        """Return everything this integration knows about the printer."""
-        return self._coordinator.runtime
-
-    @property
-    def available(self) -> bool:
-        """Return ``False`` while the coordinator's last poll failed."""
-        return self._coordinator.last_update_success
 
     async def stream_source(self) -> str | None:
         """Start the printer's stream and return its URL, or ``None`` when it fails."""

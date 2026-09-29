@@ -7,6 +7,7 @@ import pytest
 from custom_components.generic_3dprinter.adapters import anycubic_kobra as kobra
 from custom_components.generic_3dprinter.const import PrintState
 from custom_components.generic_3dprinter.protocols import ProtocolShapeError
+from tests.fake_kobra_printer import encrypt_bundle
 
 TOKEN = "0123456789abcdefFEDCBA9876543210"
 LOCAL = "localtoken123456"
@@ -21,9 +22,9 @@ def test_the_signature_is_the_double_md5_the_printer_checks() -> None:
 
 def test_the_bundle_round_trips_through_the_printers_aes() -> None:
     bundle = {"broker": "mqtts://192.0.2.5:9883", "username": "u", "password": "p", "deviceId": "D"}
-    assert kobra.decrypt_bundle(kobra.encrypt_bundle(bundle, TOKEN, LOCAL), TOKEN, LOCAL) == bundle
+    assert kobra.decrypt_bundle(encrypt_bundle(bundle, TOKEN, LOCAL), TOKEN, LOCAL) == bundle
     with pytest.raises(ProtocolShapeError):
-        kobra.decrypt_bundle(kobra.encrypt_bundle(bundle, TOKEN, LOCAL), TOKEN, "other-local-toke")
+        kobra.decrypt_bundle(encrypt_bundle(bundle, TOKEN, LOCAL), TOKEN, "other-local-toke")
 
 
 def test_cloud_mode_and_the_kobra_2_are_refused_with_their_reason() -> None:
@@ -85,7 +86,7 @@ def test_the_built_in_unit_is_unit_zero_and_an_external_one_follows() -> None:
     boxes = kobra.merge_boxes({}, {"multi_color_box": [KX_UNIT, {"id": 0, "model_id": 40001, "slots": []}]})
     system = kobra.filament_system(boxes)
     assert [unit.name for unit in system.units] == ["Multi-colour unit", "ACE Pro"]
-    assert kobra.unit_numbers(boxes) == {-1: 0, 0: 1}
+    assert [unit.unit for unit in system.units] == [0, 1]
     first, second = system.units[0].slots
     assert (first.loaded, first.active, first.material, first.color) == (True, True, "PLA", "#FFFFFF")
     assert (second.loaded, second.material) == (False, None)
