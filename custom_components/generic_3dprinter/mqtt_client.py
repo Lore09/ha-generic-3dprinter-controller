@@ -1,17 +1,5 @@
-"""A minimal MQTT 3.1.1 client for printers that host their own broker.
-
-The Centauri Carbon 2 runs an MQTT broker on the printer and expects its clients to
-connect to it. Home Assistant's own MQTT integration is built around the one broker
-the user configures, so it cannot be pointed at a broker per printer, and pulling
-in a general MQTT library for four packet types would be this integration's first
-runtime dependency.
-
-What is implemented is exactly what such a printer needs: CONNECT with a user name
-and a password, SUBSCRIBE and PUBLISH at QoS 0, PINGREQ, and DISCONNECT, over plain
-TCP or over TLS. QoS 0 is
-enough because the printer's own protocol carries request ids and re-sends its
-status, and it keeps the client free of any retransmission state.
-"""
+"""A minimal MQTT 3.1.1 client (QoS 0, plain TCP or TLS) for printers that host their own
+broker, which HA's single-broker MQTT integration cannot reach."""
 
 from __future__ import annotations
 
@@ -71,16 +59,8 @@ class MqttRefusedError(MqttError):
 
 
 def insecure_tls_context() -> ssl.SSLContext:
-    """Return a TLS client context that checks neither the name nor the certificate.
-
-    A printer's own broker presents a certificate it signed itself, for an address
-    no certificate names, so neither check can pass. The session is still
-    encrypted; what is given up is proof that the broker is the printer, which a
-    LAN client of a printer does not have by any other means either. The
-    certificate's fingerprint is kept on the client, so a changed one is visible.
-
-    No certificate store is loaded, so this is safe to call on the event loop.
-    """
+    """Return a TLS context that checks neither name nor certificate: printers self-sign.
+    The session is still encrypted, and the peer's fingerprint is kept on the client."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -222,10 +202,7 @@ class MqttClient:
         timeout: float = 10.0,
         tls: ssl.SSLContext | None = None,
     ) -> None:
-        """Open the connection and wait for the broker to accept it.
-
-        ``tls`` wraps the connection in TLS with that context; ``None`` is plain TCP.
-        """
+        """Connect and wait for CONNACK; ``tls`` is a context, or ``None`` for plain TCP."""
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port, ssl=tls), timeout=timeout

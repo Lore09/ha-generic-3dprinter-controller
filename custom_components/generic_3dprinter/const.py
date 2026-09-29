@@ -193,9 +193,7 @@ class ProtocolId(StrEnum):
     WEB_ONLY = "web_only"
 
 
-#: Commands that ask the machine to change what it is doing. Every printer refuses
-#: them while a job is running, through the default state rule in ``protocols``,
-#: because interrupting a job destroys the part.
+#: Commands that change what the machine does; refused during a job by the default state rule.
 STATE_CHANGING_COMMANDS: Final[frozenset[Command]] = frozenset(
     {
         Command.START_PRINT,
@@ -228,14 +226,8 @@ class UnsafeFeature:
 
 @dataclass(frozen=True, slots=True)
 class ModelProfile:
-    """One printer model among several that speak the same protocol.
-
-    A registration with profiles grants, once the adapter knows which model it
-    reached, only what that model has: an open-frame printer has no chamber, and
-    a printer without a camera has no camera pane, although its protocol could
-    express both. ``verified`` says whether this project measured the model on
-    hardware, and the card says so when it did not.
-    """
+    """One printer model among several on one protocol, granting only what that model has.
+    ``verified`` says whether this project measured it on hardware; the card shows it."""
 
     id: str
     name: str

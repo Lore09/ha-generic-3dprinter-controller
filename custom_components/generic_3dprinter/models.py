@@ -261,9 +261,7 @@ class PrinterSnapshot:
     errors: tuple[str, ...] = ()
 
     # --- state rules
-    #: Commands the printer supports but will not accept in its current state, each
-    #: with the reason a user reads. Filled by the base class from the adapter's
-    #: rules, never by an adapter directly.
+    #: Commands supported but refused now, with the reason; filled by the base class.
     blocked: Mapping[Command, str] = field(default_factory=lambda: MappingProxyType({}))
 
     @property

@@ -1,19 +1,5 @@
-"""A camera entity serving frames the integration fetched from the printer.
-
-A dashboard behind HTTPS cannot load a printer's own plain-HTTP camera URL, and
-several of these cameras keep only a few connection slots, so a browser cannot be
-pointed at the printer directly. This entity therefore serves frames the
-integration already holds: Home Assistant's own ``/api/camera_proxy`` and
-``/api/camera_proxy_stream`` then work for dashboards, snapshots, notifications and
-third-party camera cards, with no client needing to reach the printer at all.
-
-It shares the runtime's :class:`~.runtime.CameraHub`, so a camera tile, a card and
-a notification all read one upstream connection rather than one each.
-
-A printer whose camera is a native video stream gets a different entity: it hands
-Home Assistant the stream's URL, so the stream component plays it and shares one
-upstream connection between viewers the same way, and its stills come from ffmpeg.
-"""
+"""Camera entities: MJPEG frames relayed from the printer, or a native stream HA plays.
+Either way viewers share one upstream connection instead of reaching the printer."""
 
 from __future__ import annotations
 
@@ -33,25 +19,16 @@ from .runtime import PrinterRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
-#: Seconds between frames of the MJPEG stream Home Assistant's own camera proxy
-#: builds from stills. Five frames a second is smooth enough to watch a print and
-#: cheap enough not to saturate a single-slot camera server.
+#: Seconds between MJPEG frames built from stills: smooth enough, and light on a one-slot camera.
 FRAME_INTERVAL = 0.2
-#: Bytes ffmpeg reads to recognise a live stream before decoding it. By default it
-#: reads so much of a Kobra X's live FLV that a still times out without a frame;
-#: with this it has one in about two seconds. Measured on firmware 2.0.1.9.
+#: ffmpeg's default probe on a Kobra X's live FLV outlasts the still timeout; 32 KiB is enough.
 STILL_PROBESIZE = 32768
 
 
 async def async_still_from_stream(
     hass: HomeAssistant, source: str, width: int | None, height: int | None
 ) -> bytes | None:
-    """Return one JPEG taken from a video stream by Home Assistant's ffmpeg.
-
-    Imported here rather than at the top: the ffmpeg component needs a library that
-    is installed only where that component is used, and a printer without a stream
-    camera must not depend on it.
-    """
+    """Return one JPEG from a video stream; ffmpeg is imported lazily, for stream cameras only."""
     from homeassistant.components import ffmpeg
 
     # ffmpeg's helper takes a whole input string in place of a bare source.
@@ -75,12 +52,7 @@ async def async_setup_entry(
 
 
 class Generic3DPrinterCamera(Camera):
-    """A camera serving the frames this integration proxies for one printer.
-
-    The entity is named after the printer rather than after itself, which is the
-    shape the fleet's dashboards already expect from a printer's camera: one device
-    called "Centauri Carbon" whose camera is that printer.
-    """
+    """A camera serving the frames this integration proxies, named after its printer."""
 
     _attr_has_entity_name = False
     _attr_should_poll = False
@@ -172,23 +144,13 @@ class Generic3DPrinterStreamCamera(Camera):
         return self._source
 
     async def async_refresh_providers(self, *, write_state: bool = True) -> None:
-        """Skip Home Assistant's WebRTC probe, which would start the stream.
-
-        The probe calls :meth:`stream_source` whenever the entity is added or a
-        provider registers, and starting a printer's camera is not free: some
-        Anycubic Kobras are reported to switch the light on. Playback falls back to HLS, which
-        asks for the source only when someone actually watches.
-        """
+        """Skip HA's WebRTC probe, which would start the printer's capture with nobody watching."""
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return one still from the stream, or ``None`` when none can be taken.
-
-        The stream already playing is tried first. Starting it again restarts the
-        printer's capture, which cuts off whoever is watching, so a still starts it
-        only when the running one gives no frame. A timelapse takes a still per layer.
-        """
+        """Return one still, from the stream already running when it gives one.
+        Restarting the capture cuts off whoever is watching."""
         if self._source is not None and (still := await self._async_still(self._source, width, height)):
             return still
         source = await self.stream_source()

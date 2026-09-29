@@ -1,29 +1,5 @@
-"""Acceptance check of the Anycubic Kobra adapter against a real printer.
-
-    python tools/acceptance_kobra.py 192.168.1.50
-    python tools/acceptance_kobra.py 192.168.1.50 --camera out.flv
-    python tools/acceptance_kobra.py 192.168.1.50 --active
-
-Turn LAN Mode on at the printer first (Settings, Network, LAN Mode), and close
-Anycubic's slicer and app, which share the printer's broker.
-
-Read-only by default. It asks /info, runs the signed handshake, connects over TLS,
-asks for every report, the multi-colour unit and the file list, and prints the raw
-reports next to the snapshot the adapter builds from them, so a field read wrongly
-shows up beside what the printer sent.
-
-``--camera FILE`` starts the capture as Anycubic's client does, saves five seconds
-of the stream, and opens a second reader at the same time to see whether the camera
-serves two.
-
-``--active`` also sends, each one shown and confirmed first: the light off and on,
-the nozzle to 50 degrees and back to 0, the part fan to 30 % and back to 0, and on a
-Kobra X a home of X and Y and a 10 mm jog of X there and back. It never starts,
-pauses or stops a print. On models that apply settings only during a print, those
-steps are expected to be refused while idle, and are reported as such.
-
-Paste the whole output into an issue or a message: it contains no password.
-"""
+"""Check the Anycubic Kobra adapter against a real printer. Read-only unless ``--active``;
+usage in docs/protocol-anycubic-kobra.md. The output contains no password."""
 
 from __future__ import annotations
 

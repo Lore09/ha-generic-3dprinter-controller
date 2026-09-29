@@ -1,9 +1,4 @@
-"""The Anycubic Kobra adapter against a fake printer: handshake, reports and commands.
-
-The fake speaks the shapes the sources captured, over TLS, and checks the
-handshake's signature, so these tests fail on a wire mistake rather than on a
-fake that believes anything.
-"""
+"""The Anycubic Kobra adapter against a fake printer that checks the handshake's signature."""
 
 from __future__ import annotations
 

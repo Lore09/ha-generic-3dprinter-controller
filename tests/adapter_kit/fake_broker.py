@@ -1,13 +1,5 @@
-"""A loopback MQTT 3.1.1 broker for printers that host their own.
-
-The Centauri Carbon 2 and the Anycubic Kobra both run a broker on the printer, so
-their fakes are brokers too. This is the part they share: CONNECT with a user name
-and a password, SUBSCRIBE with ``+`` and ``#`` wildcards, PUBLISH at QoS 0, PINGREQ
-and DISCONNECT, over plain TCP or over TLS with a certificate made at test time.
-
-A printer fake decides what a connection may do and what a message means, through
-two callbacks; the broker only moves packets.
-"""
+"""A loopback MQTT 3.1.1 broker (QoS 0, TCP or TLS) for fakes of printers that host one.
+The printer fake decides, through two callbacks, what a connection may do."""
 
 from __future__ import annotations
 

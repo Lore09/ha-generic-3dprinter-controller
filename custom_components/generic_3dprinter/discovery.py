@@ -1,16 +1,5 @@
-"""Find printers on the local network, without naming a protocol.
-
-Discovery exists to save the user from guessing a protocol, not to guess one for
-them. Every adapter may broadcast for its own printers and may identify one host;
-both are read-only, and nothing here sends a command to a printer, because a wrong
-guess on a machine that treats an unknown command as fatal is how hardware gets
-bricked.
-
-This module holds what the adapters share: the UDP probe, the TCP port probe, the
-HTTP fingerprint, and the engine that asks every registration and ranks what
-answered. A printer that identifies itself outranks an HTTP fingerprint, which
-outranks an open port.
-"""
+"""Find printers on the network without naming a protocol. Read-only: nothing here sends a
+command, since a wrong guess can crash a printer. Self-identified > HTTP fingerprint > open port."""
 
 from __future__ import annotations
 
@@ -210,12 +199,7 @@ async def async_fingerprint_http(
 async def async_discover_all(
     registrations: Iterable[AdapterRegistration], timeout: float = DISCOVERY_TIMEOUT
 ) -> list[DiscoveryResult]:
-    """Ask every protocol to broadcast for its printers, one result per host.
-
-    A protocol whose probe fails is skipped, because a network that refuses one
-    broadcast should not hide the printers another one found. When two protocols
-    answer for one host, the one registered first wins.
-    """
+    """Broadcast for every protocol's printers, one result per host (first registered wins)."""
     ordered = list(registrations)
     answers = await asyncio.gather(
         *(registration.adapter.async_discover(timeout) for registration in ordered),
@@ -234,11 +218,7 @@ async def async_discover_all(
 async def async_identify_host(
     registrations: Iterable[AdapterRegistration], host: str, timeout: float = DISCOVERY_TIMEOUT
 ) -> DiscoveryResult | None:
-    """Return the best guess for one host, or ``None`` when nothing answers.
-
-    Every protocol is asked whether the host is one of its printers. Only when none
-    says so are the ports and front pages the registrations name looked at.
-    """
+    """Return the best guess for one host: an adapter's own probe first, then ports and pages."""
     ordered = list(registrations)
     answers = await asyncio.gather(
         *(registration.adapter.async_identify(host, timeout) for registration in ordered),

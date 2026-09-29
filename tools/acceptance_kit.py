@@ -1,18 +1,5 @@
-"""What every hardware acceptance script shares.
-
-An acceptance script drives the real adapter, built through the real registry,
-against a real printer, and prints a numbered list of checks. It is read-only
-unless it is run with ``--active``, and even then every step that changes the
-printer is printed and confirmed before it is sent.
-
-    report = Report()
-    report.section("connect")
-    report.check("registered with the printer", ok, detail)
-    ...
-    return report.summary()
-
-Exit codes: 0 every check passed, 1 a check failed, 2 bad usage.
-"""
+"""What every hardware acceptance script shares: numbered checks, and ``--active`` steps
+confirmed before they run. Exit codes: 0 all passed, 1 a check failed, 2 bad usage."""
 
 from __future__ import annotations
 
@@ -71,11 +58,7 @@ def add_active_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def confirm(action: str, *, active: bool, assume_yes: bool) -> bool:
-    """Return ``True`` when a step that changes the printer may run.
-
-    Without ``--active`` the step is skipped. With it, the step is printed and the
-    person at the printer answers, unless ``--yes`` was given.
-    """
+    """Whether a step that changes the printer may run: ``--active``, confirmed unless ``--yes``."""
     if not active:
         print(f"    skipped (read-only run): {action}")
         return False

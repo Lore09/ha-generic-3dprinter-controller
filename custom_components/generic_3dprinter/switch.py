@@ -1,11 +1,5 @@
-"""Switches for the printer's own lights, and for recording a timelapse.
-
-A printer's chamber light is the one thing a user reaches for constantly and the
-one thing most protocols expose as a plain on/off. The switch exists only when the
-printer grants ``SET_LIGHT``, and its state comes from the snapshot's light set
-rather than from a local flag, so a light turned on at the printer's own panel
-shows as on here.
-"""
+"""Switches for the printer's lights, auto-refill and the timelapse.
+A light's state comes from the snapshot, so one switched at the printer shows here."""
 
 from __future__ import annotations
 

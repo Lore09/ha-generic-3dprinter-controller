@@ -1,20 +1,5 @@
-"""A fake Anycubic Kobra: its handshake, its TLS broker and its reports.
-
-It answers the way the sources recorded a real printer answering:
-
-* ``/info`` and a ``/ctrl`` that checks the signature and hands out a fresh session,
-  AES-encrypted, so a broken handshake fails the tests;
-* a broker over TLS that accepts only credentials it issued;
-* reports on ``.../printer/public/<model>/<device>/<type>/report``: ``info`` with
-  the whole state, ``tempature``, ``fan``, ``light``, ``multiColorBox`` for
-  ``getInfo``, ``peripherie``, ``video`` with a per-session stream URL, and ``file``
-  for ``listLocal``, which needs paging as a Kobra X 2.0.1.9 was measured to;
-* a job setting sent while idle is dropped with no answer, which is what an idle
-  printer does; accepted commands are answered with ``code: 200``.
-
-Shapes come from chrisfore/anycubic_ha_local (Kobra S1 Max, Kobra X) and
-stribor/anycubic_kobrax (Kobra X).
-"""
+"""A fake Anycubic Kobra: signed handshake, TLS broker and reports, as the sources and
+a real Kobra X answer. See docs/protocol-anycubic-kobra.md."""
 
 from __future__ import annotations
 

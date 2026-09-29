@@ -119,11 +119,7 @@ class Generic3DPrinterEntity(CoordinatorEntity[PrinterCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Return ``False`` while the coordinator's last poll failed.
-
-        A control the printer refuses right now stays available: unavailable means
-        the printer cannot be reached, and a refusal carries its reason instead.
-        """
+        """Return ``False`` while the last poll failed. A refused control stays available."""
         return self.coordinator.last_update_success
 
     @property

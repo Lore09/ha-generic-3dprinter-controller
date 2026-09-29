@@ -1,9 +1,4 @@
-"""The adapter contract, run against every protocol's fake printer.
-
-Each adapter has tests of its own for its wire format. These hold down what every
-adapter promises the rest of the integration, so a new protocol gets them by
-adding a harness rather than by remembering to write them.
-"""
+"""The adapter contract, run against every protocol's fake printer."""
 
 from __future__ import annotations
 

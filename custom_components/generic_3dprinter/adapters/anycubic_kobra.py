@@ -1,41 +1,5 @@
-"""Anycubic Kobra adapter: the printer's LAN mode, a signed handshake and MQTT over TLS.
-
-The Kobra 3, Kobra 4, Kobra S1 and Kobra X speak one protocol. Nothing about it is
-typed in by the user except the address, because the printer hands out its own
-broker credentials:
-
-* ``GET http://<host>:18910/info`` answers with a token, the model id, the serial
-  and whether the printer is in LAN mode;
-* a ``POST`` to the ``ctrlInfoUrl`` it names, signed with
-  ``md5(md5(token[:16]) + ts + nonce)``, answers with an AES-CBC encrypted bundle:
-  the broker's address, a user name and a password for this session, the device id
-  every topic is built from, and on some firmware a client certificate and key;
-* the broker speaks MQTT over TLS on 9883 with a certificate the printer signed
-  itself. Reports arrive on ``.../printer/public/<model>/<device>/<type>/report``,
-  and commands go to ``.../web/printer/<model>/<device>/<type>``, except starting a
-  print and listing files, which use the slicer's ``.../slicer/...`` prefix.
-
-Sources, all read rather than measured by this project: chrisfore/anycubic_ha_local,
-whose protocol notes were captured on a Kobra S1 Max and whose Kobra X support was
-confirmed from a user's diagnostics; stribor/anycubic_kobrax, written by a Kobra X
-owner, for the Kobra X's own command shapes; rvanderp3/kobra-connect for the file
-list; and the Rinkhals documentation for starting a print. The registry's evidence
-says which are measured once a printer has been checked.
-
-Four facts shape the adapter.
-
-* The broker credentials last one session. Every setup runs the whole handshake
-  again, and nothing but the address is stored.
-* ``info`` is the only full report and can go minutes between pushes, while
-  ``tempature`` (the firmware's own spelling), ``fan`` and ``print`` push within a
-  second of a change. Every type is folded in, by type and never by ``action``.
-* A printer can go silent while its socket still looks open. Silence for four polls
-  is treated as a dead session, and the next read runs the handshake again.
-* On most models temperatures, fans and the speed are settings of the running job,
-  and an idle printer drops them without an answer. They are state rules, so the
-  card says so rather than sending them into the void. The Kobra X sets its
-  temperatures and fans with commands of its own, which work while idle.
-"""
+"""Anycubic Kobra adapter: LAN mode, a signed handshake and MQTT over TLS.
+The protocol, its sources and what was measured are in docs/protocol-anycubic-kobra.md."""
 
 from __future__ import annotations
 
@@ -111,9 +75,7 @@ CONNECT_TIMEOUT: Final = 10.0
 KEEPALIVE: Final = 60
 #: How long the first read after setup waits for the full ``info`` report.
 FIRST_INFO_TIMEOUT: Final = 3.0
-#: How long a later read waits for the answers to its own queries, so a command's
-#: effect shows in the read that follows it. Past this, the read returns what it
-#: has, and a late answer is folded in when it comes.
+#: How long a read waits for answers to its own queries, so a command shows in the next read.
 INFO_WAIT: Final = 1.5
 #: How long a command waits for the printer to refuse it. Silence is acceptance,
 #: because an idle printer drops a job setting without answering at all.
@@ -340,11 +302,7 @@ def _hex(color: Any) -> str | None:
 def merge_boxes(
     boxes: dict[int, dict[str, Any]], report: Mapping[str, Any]
 ) -> dict[int, dict[str, Any]]:
-    """Merge one ``multiColorBox`` report into the units already known.
-
-    A report may carry one slot or all of them, so slots merge by index. An empty
-    list is the answer of a printer with no unit attached.
-    """
+    """Merge one ``multiColorBox`` report, slot by slot; an empty list means no unit."""
     listed = report.get("multi_color_box")
     if not isinstance(listed, Sequence) or isinstance(listed, str):
         return boxes
@@ -409,10 +367,7 @@ def filament_system(boxes: Mapping[int, Mapping[str, Any]]) -> FilamentSystem | 
 
 
 def parse_file_list(data: Mapping[str, Any]) -> list[FileEntry]:
-    """Normalise a ``listLocal`` answer. Folders and entries without a name are skipped.
-
-    A Kobra X answers with ``records``; the sources recorded ``file_list``.
-    """
+    """Normalise a ``listLocal`` answer (``records`` on a Kobra X, ``file_list`` in the sources)."""
     listed = data.get("records", data.get("file_list"))
     if not isinstance(listed, Sequence) or isinstance(listed, str):
         raise ProtocolShapeError("the printer's file list has no records")
@@ -590,11 +545,7 @@ class AnycubicKobraProtocol(Protocol):
 
     @classmethod
     async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
-        """Check the printer is a supported Kobra in LAN mode and learn its serial.
-
-        Only ``/info`` is asked. The signed handshake hands out a session, which
-        waits until the entry is set up.
-        """
+        """Check ``/info`` shows a supported Kobra in LAN mode, and learn its serial."""
         try:
             async with aiohttp.ClientSession() as session:
                 info = await fetch_info(session, config.host, config.port or INFO_PORT)
@@ -813,10 +764,7 @@ class AnycubicKobraProtocol(Protocol):
 
     async def _async_command(self, kind: str, action: str, data: Any = None, *, source: str = "web") -> None:
         """Send a command, raising when the printer refuses it within the window.
-
-        Silence is acceptance: an idle printer drops a job setting without answering,
-        and the state rules keep those from being sent in the first place.
-        """
+        Silence is acceptance: an idle printer drops a job setting without answering."""
         if not self._connected:
             await self.async_setup()
         loop = asyncio.get_running_loop()
@@ -849,11 +797,8 @@ class AnycubicKobraProtocol(Protocol):
     # ------------------------------------------------------------------- read
 
     async def _async_read(self) -> PrinterSnapshot:
-        """Ask for every report and return the state folded from what arrived.
-
-        A printer that sent nothing since the last few reads is gone, even when its
-        socket still looks open, and the next read runs the handshake again.
-        """
+        """Ask for every report and fold in what arrived.
+        A printer silent for several reads is treated as gone, and the next read reconnects."""
         if not self._connected:
             await self.async_setup()
         if self._reports == 0 and self._have_info.is_set():
@@ -1082,11 +1027,7 @@ class AnycubicKobraProtocol(Protocol):
     # ----------------------------------------------------------------- camera
 
     async def async_stream_source(self) -> str:
-        """Start the capture the way the official client does, and return its URL.
-
-        The newer firmware answers a start with a per-session stream URL, and does
-        not start on a bare start, so the capture is stopped first.
-        """
+        """Restart the capture as the official client does, and return the stream URL it reports."""
         if not self._connected:
             await self.async_setup()
         self._video = asyncio.get_running_loop().create_future()

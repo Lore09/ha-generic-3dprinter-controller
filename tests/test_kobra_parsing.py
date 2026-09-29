@@ -1,8 +1,4 @@
-"""The Anycubic Kobra adapter's pure parts: handshake crypto, state and reports.
-
-Shapes are the ones the sources captured: chrisfore/anycubic_ha_local on a Kobra
-S1 Max and a Kobra X, stribor/anycubic_kobrax on a Kobra X.
-"""
+"""The Anycubic Kobra adapter's pure parts: handshake crypto, state and reports."""
 
 from __future__ import annotations
 

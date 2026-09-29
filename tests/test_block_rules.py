@@ -1,10 +1,4 @@
-"""State rules: commands a printer supports but will not take right now.
-
-The base class reads the printer through the adapter, stamps the capabilities and
-the blocked commands on the snapshot, and refuses a blocked command before the
-adapter sees it. A stub adapter stands in for a printer, so only the base class is
-under test here.
-"""
+"""State rules: commands a printer supports but will not take right now."""
 
 from __future__ import annotations
 

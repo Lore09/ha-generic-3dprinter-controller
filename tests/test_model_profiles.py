@@ -1,9 +1,4 @@
-"""Model profiles: one protocol, several printers, each with what it really has.
-
-The adapter learns which model it reached while it sets up, and from then on the
-granted capabilities are the registration's, narrowed to that model and less any
-opt-in the user did not grant. A stub adapter stands in for the printer.
-"""
+"""Model profiles: one protocol, several printers, each with what it really has."""
 
 from __future__ import annotations
 

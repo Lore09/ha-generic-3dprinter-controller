@@ -269,15 +269,8 @@ def _flag(value: Any) -> bool | None:
 
 
 def parse_cc2_reply(reply: dict[str, Any], sender: str) -> DiscoveryResult | None:
-    """Return what a Centauri Carbon 2 said about itself, or ``None`` for anything else.
-
-    The reply carries no address of its own, so the sender of the datagram is the
-    printer's address. Measured on a live printer::
-
-        {"id": 0, "result": {"host_name": "CC2 QAZJ", "lan_status": 0,
-         "machine_model": "Centauri Carbon 2", "protocol_version": "1.0.0",
-         "sn": "F01BXKSWL13QAZJ", "token_status": 0}}
-    """
+    """Return what a Centauri Carbon 2 said about itself, or ``None``.
+    The reply has no address, so the datagram's sender is the printer."""
     result = reply.get("result")
     if not isinstance(result, dict):
         return None
@@ -310,12 +303,8 @@ def _is_cc2_reply(payload: dict[str, Any]) -> bool:
 async def async_discover_cc2(
     host: str | None = None, timeout: float = DISCOVERY_TIMEOUT
 ) -> DiscoveryResult | None:
-    """Ask for a Centauri Carbon 2, on one host or by broadcast.
-
-    This is the discovery request Elegoo's own slicer sends. It is answered even
-    while another client holds a session, and it is the only way to learn the
-    serial number every MQTT topic is built from.
-    """
+    """Ask for a Centauri Carbon 2 as Elegoo's slicer does; the only source of the serial
+    every topic needs, answered even while another client holds a session."""
     target = (host or "255.255.255.255", CC2_DISCOVERY_PORT)
     answer = await async_probe_udp(CC2_DISCOVERY_PROBE, target, timeout, _is_cc2_reply)
     if answer is None:
@@ -539,9 +528,7 @@ def lan_only_hint(discovery: DiscoveryResult | None) -> str:
 class ElegooCC2Protocol(Protocol):
     """The Centauri Carbon 2 over its own MQTT broker, with the camera on HTTP."""
 
-    #: Moving the head, or loading, unloading or editing a CANVAS slot, collides
-    #: with the firmware's own moves unless the printer is idle; levelling and
-    #: homing count as busy too.
+    #: Moves and CANVAS slot changes collide with the firmware's own unless the printer is idle.
     block_rules = (
         BlockRule(
             frozenset(
@@ -670,13 +657,8 @@ class ElegooCC2Protocol(Protocol):
 
     @classmethod
     async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
-        """Learn the serial number and refuse a printer that is not in LAN-only mode.
-
-        The discovery request is the one Elegoo's slicer sends; it is not a command.
-        A printer that does not answer it can still be added when its serial number
-        is entered by hand, because the probe is UDP and may be filtered between
-        networks.
-        """
+        """Learn the serial and refuse a printer not in LAN-only mode. A printer that ignores
+        the UDP probe can still be added with its serial typed in."""
         found = await async_discover_cc2(config.host, timeout=DISCOVERY_TIMEOUT)
         if found is None:
             if config.serial:

@@ -1,10 +1,4 @@
-"""A printer whose camera is a native video stream, played by Home Assistant.
-
-The MJPEG relay stays for printers that serve JPEG frames. A printer with
-CAMERA_STREAM instead hands Home Assistant a stream URL: its camera entity plays
-it through the stream component, its stills come from ffmpeg, and the card is told
-to embed that entity rather than an MJPEG URL.
-"""
+"""A printer whose camera is a native video stream, played by Home Assistant."""
 
 from __future__ import annotations
 

@@ -1,11 +1,4 @@
-"""One harness per protocol, so every adapter runs the same contract tests.
-
-A harness starts its protocol's fake printer, builds the adapter through the real
-registry, and tells the contract tests three things about the fake: how many
-commands reached it, how many connections are open on it, and how to power it off
-and on again. The fakes are the ones each adapter's own tests already use; a
-harness only wraps them.
-"""
+"""One harness per protocol, wrapping its fake printer so every adapter runs the contract tests."""
 
 from __future__ import annotations
 

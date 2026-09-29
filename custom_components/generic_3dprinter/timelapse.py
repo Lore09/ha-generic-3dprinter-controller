@@ -1,15 +1,5 @@
-"""A timelapse of each print, taken from the printer's own camera.
-
-While the timelapse switch is on, a frame is saved each time the printer reports a
-new layer, or every :data:`FALLBACK_INTERVAL` seconds from a printer that reports no
-layer. When the job ends the frames become one MP4 in Home Assistant's media folder,
-under ``generic_3dprinter/<printer>/``, and a ``generic_3dprinter_timelapse`` event
-says where, so an automation can send it on.
-
-Frames are read through the printer's camera entity, so an MJPEG camera and a
-stream camera are read the same way, and a timelapse shares the printer's one
-upstream camera connection with whoever is watching.
-"""
+"""A timelapse of each print from the printer's camera: a frame per layer, an MP4 at the end.
+Behaviour and the event it fires are described in the README."""
 
 from __future__ import annotations
 
@@ -47,9 +37,7 @@ FRAME_RATE: Final = 30
 MIN_FRAMES: Final = 2
 #: Seconds the camera is given to settle after the light is switched on for a job.
 LIGHT_SETTLE: Final = 2.0
-#: States that end a job. Paused, preparing and unknown do not: a print that pauses
-#: for a filament change, or a printer that drops off the network for a poll, goes
-#: on in the same timelapse.
+#: States that end a job. Paused, preparing and unknown do not: the timelapse goes on.
 _ENDED: Final = frozenset({PrintState.FINISHED, PrintState.CANCELLED, PrintState.IDLE, PrintState.ERROR})
 
 
@@ -78,12 +66,7 @@ class Timelapse:
         camera: Callable[[], str | None],
         set_light: Callable[[bool], Awaitable[None]] | None = None,
     ) -> None:
-        """Record from the camera entity ``camera`` names, into a folder named after the printer.
-
-        The entity id is asked for at each frame: the camera platform may register
-        its entity after this one is made. ``set_light`` switches the printer's light,
-        for :attr:`with_light`.
-        """
+        """Record from the camera ``camera`` names, looked up per frame as it may register later."""
         self.hass = hass
         self.camera = camera
         self.set_light = set_light
@@ -280,11 +263,7 @@ class TimelapseSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
 
 
 class TimelapseLightSwitch(Generic3DPrinterEntity, SwitchEntity, RestoreEntity):
-    """Whether a timelapse switches the light on for a job that starts in the dark.
-
-    A job that starts with the light off gets it switched on before its first frame
-    and off again when its video is made. A light already on is left alone.
-    """
+    """Whether a timelapse lights a job that starts in the dark, and turns it off after."""
 
     _attr_entity_category = EntityCategory.CONFIG
 

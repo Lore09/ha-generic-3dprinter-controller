@@ -47,11 +47,7 @@ _SERIAL: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 def valid_serial(serial: str) -> bool:
-    """Whether a serial is safe inside an MQTT topic.
-
-    There "/", "+" and "#" have meaning, so only what real serials are made of
-    passes: letters, digits, and the dashes a Kobra's reads F757-6C30-088E-57CA.
-    """
+    """Whether a serial is safe in an MQTT topic: letters, digits, '-' and '_' only."""
     return _SERIAL.fullmatch(serial) is not None
 
 
@@ -152,10 +148,7 @@ class CommandBlockedError(ProtocolError):
 @dataclass(frozen=True, slots=True)
 class BlockRule:
     """Commands a printer refuses while ``when`` holds for its latest snapshot.
-
-    Rules are data an adapter declares, so the card, the entities and the guard in
-    :meth:`Protocol.async_send` all read one computed set and cannot disagree.
-    """
+    The card, the entities and :meth:`Protocol.async_send` all read the same computed set."""
 
     commands: frozenset[Command]
     when: Callable[[PrinterSnapshot], bool]
@@ -172,9 +165,7 @@ def not_idle(snapshot: PrinterSnapshot) -> bool:
     return snapshot.print_state is not PrintState.IDLE
 
 
-#: Every printer refuses to move its head, start a job or swap filament during a
-#: job. The card used to enforce this itself; it is a rule now, so an adapter can
-#: tighten it and a user reads the reason.
+#: Every printer refuses to move, start a job or swap filament while a job runs.
 DEFAULT_BLOCK_RULES: Final[tuple[BlockRule, ...]] = (
     BlockRule(
         STATE_CHANGING_COMMANDS,
@@ -381,9 +372,7 @@ def parse_config(
 class Protocol(ABC):
     """Transport adapter for one printer. One instance per config entry."""
 
-    #: The printer's state rules. An adapter extends the defaults rather than
-    #: replacing them, unless its printer is known to allow more, and puts its own
-    #: rules first: the first rule that blocks a command gives its reason.
+    #: State rules: extend the defaults, own rules first; the first that blocks gives the reason.
     block_rules: tuple[BlockRule, ...] = DEFAULT_BLOCK_RULES
 
     def __init__(
@@ -395,11 +384,7 @@ class Protocol(ABC):
         unsafe: tuple[UnsafeFeature, ...] = (),
         models: tuple[ModelProfile, ...] = (),
     ) -> None:
-        """Store the configuration, the shared HTTP session and the granted set.
-
-        ``granted`` is the registration's set after every opt-in gate; ``models``
-        narrows it further once the adapter reports which model it reached.
-        """
+        """Store the config, the HTTP session and the granted set, which ``models`` narrows."""
         self._config = config
         self._session = session
         self._granted = granted
@@ -420,12 +405,7 @@ class Protocol(ABC):
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """Return the capabilities this printer grants, after every gate.
-
-        Narrowed to the model's profile when the adapter has reported a model its
-        registration knows. An unknown model keeps the registration's whole set,
-        and the snapshot says the model is unknown.
-        """
+        """Return the granted capabilities, narrowed to the reached model's profile when known."""
         profile = self.model_profile
         if profile is None:
             return self._granted
@@ -454,29 +434,17 @@ class Protocol(ABC):
 
     @property
     def filament_presets(self) -> tuple[Mapping[str, Any], ...]:
-        """Return the filaments the card offers when a slot's filament is set.
-
-        Each is ``material``, ``name``, ``min_temp``, ``max_temp`` and ``brands``.
-        Empty unless the printer can record a slot's filament and keeps a list of
-        its own; the card then asks for the material in words.
-        """
+        """Return the filaments the card offers for a slot: material, name, temps, brands."""
         return ()
 
     @classmethod
     async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
-        """Look for this protocol's printers on the local network.
-
-        Read-only: a probe may ask a printer who it is and nothing more. The
-        default finds nothing, for a protocol with no discovery of its own.
-        """
+        """Look for this protocol's printers on the network. Read-only; the default finds none."""
         return []
 
     @classmethod
     async def async_identify(cls, host: str, timeout: float) -> DiscoveryResult | None:
-        """Ask ``host`` whether it is one of this protocol's printers.
-
-        Read-only, like :meth:`async_discover`. ``None`` means no, or no answer.
-        """
+        """Ask ``host`` if it is one of this protocol's printers; ``None`` means no. Read-only."""
         return None
 
     @classmethod
@@ -491,11 +459,7 @@ class Protocol(ABC):
 
     @abstractmethod
     async def async_setup(self) -> None:
-        """Open what this protocol needs and verify the credential once.
-
-        Idempotent. Raises :class:`UnreachableError` or :class:`AuthError`. Called
-        at entry setup and after a failed read, never per poll.
-        """
+        """Open what this protocol needs and check the credential once. Idempotent, not per poll."""
         raise NotImplementedError
 
     @abstractmethod
@@ -509,12 +473,8 @@ class Protocol(ABC):
         return self._last_snapshot
 
     async def async_read(self) -> PrinterSnapshot:
-        """Return one complete snapshot, with capabilities and state rules applied.
-
-        Raises :class:`UnreachableError` or :class:`AuthError`. Adapters implement
-        :meth:`_async_read`; this wrapper is what makes every snapshot carry the
-        granted capabilities and the blocked commands, whatever the adapter built.
-        """
+        """Return one snapshot with the granted capabilities and state rules applied.
+        Raises UnreachableError or AuthError; adapters implement :meth:`_async_read`."""
         snapshot = await self._async_read()
         snapshot = replace(snapshot, capabilities=self.capabilities)
         profile = self.model_profile
@@ -539,11 +499,7 @@ class Protocol(ABC):
 
     @abstractmethod
     async def _async_read(self) -> PrinterSnapshot:
-        """Read the printer once and return what it reported.
-
-        Raises :class:`UnreachableError` or :class:`AuthError`. Never raises for a
-        field the protocol cannot express: that field stays ``None``.
-        """
+        """Read the printer once. A field the protocol cannot express stays ``None``."""
         raise NotImplementedError
 
     def async_subscribe(self) -> AsyncIterator[PrinterSnapshot] | None:
@@ -564,10 +520,8 @@ class Protocol(ABC):
         except ParamError as err:
             raise ProtocolError(str(err)) from err
 
-        # The rules need a state to judge. A command before the first read reads the
-        # printer once, so none slips past them; and a command the last snapshot
-        # blocks is judged again on a fresh read, because the snapshot can be a poll
-        # old and a print that just ended must not keep the head locked.
+        # Rules need a state: read once before the first command, and re-read before refusing,
+        # since the last snapshot may be a poll old.
         snapshot = self._last_snapshot
         if snapshot is None or command in snapshot.blocked:
             snapshot = await self.async_read()
@@ -604,20 +558,12 @@ class Protocol(ABC):
         raise NotImplementedError
 
     async def async_stream_source(self) -> str:
-        """Start the printer's video stream if it needs starting, and return its URL.
-
-        Only for a printer with ``CAMERA_STREAM``. It may send the printer whatever
-        switches its camera on, so it is called when someone plays the stream, not
-        when the camera entity is created.
-        """
+        """Start the printer's video stream if needed and return its URL (``CAMERA_STREAM`` only).
+        Called when someone plays the stream, since starting it may switch the camera on."""
         raise UnreachableError("this protocol has no video stream")
 
     async def async_camera_frame(self) -> bytes:
-        """Return one complete JPEG frame.
-
-        Adapters without a camera are never called, because ``CAMERA`` is absent
-        from their capability set.
-        """
+        """Return one complete JPEG frame (only called when ``CAMERA`` is granted)."""
         raise UnreachableError("this protocol has no camera")
 
     def __repr__(self) -> str:

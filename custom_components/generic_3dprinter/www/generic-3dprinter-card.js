@@ -1371,10 +1371,7 @@ class PrinterView {
     this.card.send(this.entryId, "home", { axes });
   }
 
-  /**
-   * Return why the printer refuses `command` right now, or null. The backend owns
-   * these rules; the card only draws them, so it never guesses a printer's limits.
-   */
+  /** Why the printer refuses `command` now, or null. The backend owns these rules. */
   blockedReason(command) {
     const blocked = this.snapshot.blocked || {};
     return blocked[command] || null;
@@ -1605,12 +1602,7 @@ class PrinterView {
     this._paintCameraOverlay();
   }
 
-  /**
-   * Embed Home Assistant's own camera card for a printer whose camera is a video
-   * stream. Home Assistant plays it and shares one upstream connection between
-   * viewers, so the card neither ships a player nor opens the printer itself. The
-   * card is built once per entity and only handed the new `hass` on each update.
-   */
+  /** Embed HA's own camera card for a stream camera; built once, then only handed `hass`. */
   _showStream(entityId) {
     if (this.image) this.image.hidden = true;
     const hass = this.card.hass;

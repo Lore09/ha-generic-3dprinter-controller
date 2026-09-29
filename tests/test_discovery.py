@@ -1,9 +1,4 @@
-"""Discovery asks every protocol, and the config flow never names one.
-
-Each adapter may broadcast for its printers and may identify one host; both are
-read-only. The engine gathers what they answer, and the flow offers it: straight
-to the form for one printer, a choice for several, and nothing already set up.
-"""
+"""Discovery asks every protocol, and the config flow offers what answered."""
 
 from __future__ import annotations
 

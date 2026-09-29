@@ -1,9 +1,4 @@
-"""The adapter registry is data, so it is checked like data.
-
-Nothing here talks to a printer. These tests hold down the promise the registry
-makes to the rest of the integration: every protocol it names is installed, and
-every declaration it carries refers to something that exists.
-"""
+"""The adapter registry is data: every protocol it names exists, and so does what it refers to."""
 
 from __future__ import annotations
 

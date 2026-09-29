@@ -40,6 +40,9 @@ The credentials last one session. The adapter runs the handshake on every setup 
 stores only the address and the serial. The Kobra 2 (models 20021 to 20023) uses an
 older, unsigned handshake that no source documents, and is refused.
 
+A printer can go silent while its socket still looks open. After several reads with
+no report, the session is treated as dead and the next read runs the handshake again.
+
 ## Topics
 
 * Reports: `anycubic/anycubicCloud/v1/printer/public/<modelId>/<deviceId>/<type>/report`
@@ -80,7 +83,7 @@ spelling (1).
 | jog | `axis` / `move`, `{axis: 1 X, 2 Y, 3 Z, move_type: 1 plus or 0 minus, distance}` (2) | none |
 | auto-feed | `multiColorBox` / `setAutoFeed` (1) | same |
 | start print | `slicer/` `print` / `start`, `{taskid: "-1", filename, filetype: 1}` (4); an opt-in | same |
-| file list | `slicer/` `file` / `listLocal`, `{path: "/"}` (3) | same |
+| file list | `slicer/` `file` / `listLocal`, `{path: "/", page_num: 1, page_size: N}` (3, measured) | same |
 
 A refusal comes back on the type's report topic with a `code` other than 200. An
 idle printer drops a job setting without any answer (1), which is why those are
@@ -147,6 +150,18 @@ Firmware 2.0.1.9, model id 20030, with `tools/acceptance_kobra.py`:
 ## Still to verify
 
 Starting, pausing, resuming and stopping a print, the speed and auto-feed on the
-Kobra X, and every other model. `tools/acceptance_kobra.py <host>` reads a printer without changing it;
-`--camera out.flv` checks the stream; `--active` sends the light, a nozzle target,
-the part fan and, on a Kobra X, a home and a jog, each confirmed first.
+Kobra X, and every other model.
+
+## Checking a printer
+
+Turn LAN Mode on, and close Anycubic's slicer and app, which share the broker.
+
+```sh
+python tools/acceptance_kobra.py <host>                  # read-only: handshake, reports, files
+python tools/acceptance_kobra.py <host> --camera out.flv # also 5 s of the stream, and a second reader
+python tools/acceptance_kobra.py <host> --active         # also light, nozzle, fan, and home/jog on a Kobra X
+```
+
+`--active` shows and confirms each step, and never starts, pauses or stops a print.
+On models that apply settings only during a print, those steps are refused while
+idle. The output contains no password, so it can be pasted into an issue.

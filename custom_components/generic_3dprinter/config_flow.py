@@ -171,11 +171,7 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
         return await self.async_step_details()
 
     def _already_configured(self, protocol: ProtocolId, host: str, serial: Any = None) -> bool:
-        """Return ``True`` when an entry already drives this printer.
-
-        Matched on the serial number where both sides know it, so a printer whose
-        address changed is still recognised, and on the address otherwise.
-        """
+        """Return ``True`` when an entry already drives this printer, by serial, else by address."""
         for entry in self._async_current_entries(include_ignore=False):
             data = {**entry.data, **entry.options}
             if data.get(CONF_PROTOCOL) != protocol.value:
