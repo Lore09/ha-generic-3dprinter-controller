@@ -21,6 +21,8 @@ FRAME_TIMEOUT: Final = 15.0
 #: Frames per second of a stream: enough for a print, and light on the printer.
 STREAM_RATE: Final = 2
 READ_CHUNK: Final = 65536
+#: Seconds the drain waits while another reader holds ffmpeg's output.
+DRAIN_RETRY: Final = 0.05
 MAX_FRAME_BYTES: Final = 8 * 1024 * 1024
 
 #: Starts ffmpeg with these arguments; a test hands in a fake process.
@@ -128,5 +130,10 @@ class RtspFrames:
     @staticmethod
     async def _async_drain(process: Any) -> None:
         with suppress(OSError, ValueError):
-            while await process.stdout.read(READ_CHUNK):
-                pass
+            while True:
+                try:
+                    if not await process.stdout.read(READ_CHUNK):
+                        return
+                except RuntimeError:
+                    # A viewer still waits in its own read, and drains until it stops reading.
+                    await asyncio.sleep(DRAIN_RETRY)

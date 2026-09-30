@@ -184,6 +184,35 @@ async def test_ffmpeg_is_stopped_with_q_then_term_and_killed_last(
     assert ("switched off and on" in caplog.text) is ("KILL" in log)
 
 
+async def test_the_stop_drains_ffmpeg_once_a_viewer_stops_reading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ffmpeg quits slowly; while it does, its output is drained even after the viewer left."""
+    monkeypatch.setattr(rtsp_frames, "STOP_WAIT", 5.0)
+    monkeypatch.setattr(rtsp_frames, "DRAIN_RETRY", 0.001)
+    spawner = Spawner(obeys=())
+    reader = RtspFrames("ffmpeg", REACHED_URL, still=False, spawn=spawner)
+    await reader.async_start()
+    frames = reader.async_frames()
+    assert await anext(frames) == JPEG
+    viewer = asyncio.create_task(anext(frames))
+    await asyncio.sleep(0)
+    (process,) = spawner.processes
+    assert process.stdout._waiter is not None  # noqa: SLF001 - the viewer waits in read()
+    stop = asyncio.create_task(reader.async_stop())
+    await asyncio.sleep(0.01)
+    viewer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await viewer
+    process.feed(b"x" * 1000)
+    for _ in range(100):
+        if not process.stdout._buffer:  # noqa: SLF001
+            break
+        await asyncio.sleep(0.01)
+    assert not process.stdout._buffer  # noqa: SLF001
+    process.exit(0)
+    await asyncio.wait_for(stop, 5)
+    assert process.log == ["q"]
+
+
 async def test_no_frame_in_time_is_an_unreachable_camera(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rtsp_frames, "FRAME_TIMEOUT", 0.05)
     reader = RtspFrames("ffmpeg", REACHED_URL, still=True, spawn=Spawner(frames=()))
@@ -406,4 +435,39 @@ async def test_teardown_stops_a_running_stream_before_it_closes_the_socket(
     assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
     await stream.aclose()
     assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
+    assert resin_printer.forbidden == []
+
+
+async def test_teardown_while_a_viewer_waits_for_a_frame_still_switches_off_and_closes(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """A real ffmpeg takes a while to quit after ``q``, so the viewer is still reading
+    its output when the stop starts draining it."""
+    spawner = Spawner(resin_printer, obeys=("TERM",))
+    adapter = _adapter(resin_printer, session, spawner)
+    first = asyncio.Event()
+
+    async def watch() -> list[bytes]:
+        frames = []
+        async for frame in adapter.async_camera_stream():
+            frames.append(frame)
+            first.set()
+        return frames
+
+    task = asyncio.create_task(watch())
+    await asyncio.wait_for(first.wait(), 5)
+    (process,) = spawner.processes
+    assert process.stdout._waiter is not None  # noqa: SLF001 - the viewer waits in read()
+
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+
+    assert process.log == ["q", "TERM"]
+    assert process.enables_at_exit == [1]
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
+    for _ in range(50):
+        if not resin_printer.connections:
+            break
+        await asyncio.sleep(0.02)
+    assert resin_printer.connections == 0
+    assert await asyncio.wait_for(task, 5) == [JPEG]
     assert resin_printer.forbidden == []
