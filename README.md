@@ -5,8 +5,9 @@ config entry, each protocol is an adapter, and everything a user sees reads one
 shared model, so the dashboard, the entities and the automations never learn which
 protocol a printer speaks.
 
-Covers the **Elegoo Centauri Carbon** (SDCP) and **Centauri Carbon 2** (MQTT),
-**Klipper via Moonraker**, **OctoPrint**, **Duet / RepRapFirmware**, and any printer
+Covers the **Elegoo Centauri Carbon** (SDCP) and **Centauri Carbon 2** (MQTT), the
+**Anycubic Kobra 3, 4, S1 and X** (LAN mode), **Klipper via Moonraker**,
+**OctoPrint**, **Duet / RepRapFirmware**, and any printer
 whose only interface is its own embedded web page. Adding a protocol is one module
 plus one registry entry.
 
@@ -86,6 +87,7 @@ different protocols.
 | --- | --- | --- |
 | Elegoo Centauri Carbon (SDCP) | 3030, camera 3031 | none on the LAN |
 | Elegoo Centauri Carbon 2 (MQTT) | 1883, camera 8080 | access code, if one is set |
+| Anycubic Kobra (LAN mode) | 18910, broker 9883, camera 18088 | none: the printer hands them out |
 | Klipper via Moonraker | 7125 | API key, if Moonraker requires one |
 | OctoPrint | 5000 or 80 | API key |
 | Duet (RepRapFirmware) | 80 | password, if the board has one |
@@ -111,6 +113,28 @@ turns off Elegoo's cloud and the remote access of its phone app.
 The printer shares a handful of client slots between the slicer, the phone app and
 integrations like this one. If it reports that none is free, close one of them.
 
+### Anycubic Kobra: turn on LAN Mode first
+
+A Kobra answers local clients only in **LAN Mode**: on the printer's screen,
+**Settings → Network → LAN Mode**. Then add it with its address alone. The
+integration reads its model and serial, and the printer hands out its own broker
+credentials each time the integration connects, so there is nothing to type and
+nothing secret is stored.
+
+What the card offers follows the model. A Kobra X can be homed and jogged, and its
+temperatures and fan can be set while idle. The Kobra 3, 4 and S1 apply
+temperatures, fans and speed only during a print, and the card says so rather than
+sending them. The Kobra X's built-in four-colour changer, and any ACE, appear as a
+multi-material unit with auto-feed. The camera is a video stream Home Assistant
+plays. Files can be listed and printed, but not uploaded yet.
+
+**The Kobra X has been checked on a real printer**, firmware 2.0.1.9: status, the
+colour changer, files, the camera, the light, temperatures, the fan, home and jog.
+Starting, pausing and stopping a print, the speed and auto-feed are not measured
+yet. The other Kobras are built from the published work of other projects, listed
+in `docs/protocol-anycubic-kobra.md`, and the card marks them as unverified.
+`tools/acceptance_kobra.py` checks a printer.
+
 ### The one dangerous setting
 
 On Elegoo SDCP, **starting a print over the network** is off by default and is
@@ -134,6 +158,9 @@ auto-levelling choice, so the integration always asks for levelling, and lets th
 printer choose the Canvas tray, because a wrong tray mapping is accepted and then
 printed from the first tray. Moving the head and homing are refused unless the
 printer reports itself idle.
+
+An Anycubic Kobra has the same opt-in: its start request is documented only for the
+Kobra 3 through custom firmware.
 
 ## The card
 
@@ -220,6 +247,42 @@ camera is not opened.
 The card draws a control only when the printer reports the capability for it, so a
 printer that cannot start a print shows no print button, a printer that cannot jog
 shows no joystick, and a printer with no camera shows no camera pane.
+
+## Timelapse
+
+A printer with a camera gets a **Timelapse** switch, off until you turn it on. While
+it is on, every print is recorded: one frame each time the printer reports a new
+layer, or one every 30 seconds from a printer that reports no layer. When the job
+finishes, is cancelled or fails, the frames become an MP4 at 30 frames a second in
+Home Assistant's media folder, under `generic_3dprinter/<printer>/`, where the media
+browser shows it. Pausing does not end the job, and a job with a single frame leaves
+nothing behind. Turning the switch off during a print makes the video of what was
+recorded so far.
+
+Each video fires a `generic_3dprinter_timelapse` event with its `path`, its
+`media_content_id` and its number of `frames`, and the switch keeps the last one in
+its `last_video` attribute.
+
+The frames need light. A printer with a switchable light also gets a **Timelapse
+light** switch: with it on, a recording that starts with the light off switches it
+on before its first frame and off again once the video is made, and a light that
+was already on is left alone. Without it the light stays as you set it; a Kobra X
+keeps its light off when the camera starts and streams with it off, so a print at
+night in a dark room makes a dark timelapse.
+
+```yaml
+automation:
+  - alias: Send the timelapse
+    triggers:
+      - trigger: event
+        event_type: generic_3dprinter_timelapse
+    actions:
+      - action: notify.mobile_app_phone
+        data:
+          message: "Your timelapse is ready ({{ trigger.event.data.frames }} frames)"
+          data:
+            video: "{{ trigger.event.data.media_content_id }}"
+```
 
 ## Automations
 
@@ -319,6 +382,10 @@ component. Entity names come from there, not from `strings.json`.
   The speed mode can only be changed during a print: an idle printer refuses it.
   `docs/protocol-elegoo-cc2.md` has every measurement, and `tools/acceptance_cc2.py`
   checks a printer read-only.
+* The **Anycubic Kobra** adapter has not been run against a printer yet. It follows
+  a capture from a Kobra S1 Max, users' diagnostics from a Kobra X, and a Kobra X
+  owner's own integration. `docs/protocol-anycubic-kobra.md` says which source each
+  command comes from, and `tools/acceptance_kobra.py` checks a printer.
 
 ## Documentation
 
@@ -327,6 +394,7 @@ component. Entity names come from there, not from `strings.json`.
 | `docs/architecture.md` | Why the integration is shaped this way |
 | `docs/protocol-elegoo-sdcp-verified.md` | Every SDCP fact observed on real hardware |
 | `docs/protocol-elegoo-cc2.md` | The Centauri Carbon 2 protocol: what is measured and what is sourced |
+| `docs/protocol-anycubic-kobra.md` | The Anycubic Kobra protocol, every command with its source |
 | `docs/protocol-adapter-layer-design.md` | The adapter interface and its types |
 | `docs/web-proxy-transport-design.md` | The reverse proxy and socket bridge |
 | `docs/research/` | The cited protocol research, with its open questions marked |
@@ -335,9 +403,14 @@ component. Entity names come from there, not from `strings.json`.
 ## Development
 
 ```bash
-python -m pytest tests/ -q     # 222 tests, about twenty seconds
-npm test                       # 46 card tests
+python -m venv .venv
+.venv/bin/pip install -r requirements-test.txt
+.venv/bin/python -m pytest -q  # the Python suite, about ten seconds
+npm install && npm test        # the card tests, Node 22.12 or newer
 ```
+
+`requirements-test.txt` pins the Home Assistant test harness, and through it the
+Home Assistant release the suite runs against.
 
 `tools/` holds the instruments used to work on the SDCP protocol and to prove the
 integration against real hardware:
@@ -346,6 +419,7 @@ integration against real hardware:
 | --- | --- |
 | `tools/acceptance_sdcp.py` | Drive the real adapter against a real printer, 21 checks |
 | `tools/acceptance_cc2.py` | The same for a Centauri Carbon 2, read-only |
+| `tools/acceptance_kobra.py` | The same for an Anycubic Kobra, read-only unless `--active` |
 | `tools/acceptance_camera.py` | Measure a printer's camera: frames, distinct frames, frame rate |
 | `tools/probe_sdcp.py` | Dump every raw SDCP frame a printer sends |
 | `tools/dump_status.py` | Print the status, attributes and file-list schemas |

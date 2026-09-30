@@ -1,36 +1,39 @@
-"""A camera entity serving frames the integration fetched from the printer.
-
-A dashboard behind HTTPS cannot load a printer's own plain-HTTP camera URL, and
-several of these cameras keep only a few connection slots, so a browser cannot be
-pointed at the printer directly. This entity therefore serves frames the
-integration already holds: Home Assistant's own ``/api/camera_proxy`` and
-``/api/camera_proxy_stream`` then work for dashboards, snapshots, notifications and
-third-party camera cards, with no client needing to reach the printer at all.
-
-It shares the runtime's :class:`~.runtime.CameraHub`, so a camera tile, a card and
-a notification all read one upstream connection rather than one each.
-"""
+"""Camera entities: MJPEG frames relayed from the printer, or a native stream HA plays.
+Either way viewers share one upstream connection instead of reaching the printer."""
 
 from __future__ import annotations
 
 import logging
+import shlex
 
 from aiohttp import web
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import PrinterCoordinator
 from .entity import async_device_info, async_require_coordinator
+from .protocols import ProtocolError
 from .runtime import PrinterRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
-#: Seconds between frames of the MJPEG stream Home Assistant's own camera proxy
-#: builds from stills. Five frames a second is smooth enough to watch a print and
-#: cheap enough not to saturate a single-slot camera server.
+#: Seconds between MJPEG frames built from stills: smooth enough, and light on a one-slot camera.
 FRAME_INTERVAL = 0.2
+#: ffmpeg's default probe on a Kobra X's live FLV outlasts the still timeout; 32 KiB is enough.
+STILL_PROBESIZE = 32768
+
+
+async def async_still_from_stream(
+    hass: HomeAssistant, source: str, width: int | None, height: int | None
+) -> bytes | None:
+    """Return one JPEG from a video stream; ffmpeg is imported lazily, for stream cameras only."""
+    from homeassistant.components import ffmpeg
+
+    # ffmpeg's helper takes a whole input string in place of a bare source.
+    command = f"-probesize {STILL_PROBESIZE} -i {shlex.quote(source)}"
+    return await ffmpeg.async_get_image(hass, command, width=width, height=height)
 
 
 async def async_setup_entry(
@@ -40,24 +43,19 @@ async def async_setup_entry(
 ) -> None:
     """Create the camera entity when the printer has a camera."""
     runtime: PrinterRuntime = entry.runtime_data
-    if not runtime.has_camera:
-        return
-    coordinator = async_require_coordinator(hass, entry.entry_id)
-    async_add_entities([Generic3DPrinterCamera(coordinator)])
+    if runtime.has_stream:
+        coordinator = async_require_coordinator(hass, entry.entry_id)
+        async_add_entities([Generic3DPrinterStreamCamera(coordinator)])
+    elif runtime.has_camera:
+        coordinator = async_require_coordinator(hass, entry.entry_id)
+        async_add_entities([Generic3DPrinterCamera(coordinator)])
 
 
-class Generic3DPrinterCamera(Camera):
-    """A camera serving the frames this integration proxies for one printer.
-
-    The entity is named after the printer rather than after itself, which is the
-    shape the fleet's dashboards already expect from a printer's camera: one device
-    called "Centauri Carbon" whose camera is that printer.
-    """
+class _PrinterCamera(Camera):
+    """A printer's camera, named after the printer and available while it answers."""
 
     _attr_has_entity_name = False
     _attr_should_poll = False
-    _attr_frame_interval = FRAME_INTERVAL
-    _attr_is_streaming = True
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
         """Bind the camera to its coordinator and its printer's device."""
@@ -77,6 +75,13 @@ class Generic3DPrinterCamera(Camera):
     def available(self) -> bool:
         """Return ``False`` while the coordinator's last poll failed."""
         return self._coordinator.last_update_success
+
+
+class Generic3DPrinterCamera(_PrinterCamera):
+    """A camera serving the frames this integration proxies."""
+
+    _attr_frame_interval = FRAME_INTERVAL
+    _attr_is_streaming = True
 
     @property
     def is_streaming(self) -> bool:
@@ -104,3 +109,44 @@ class Generic3DPrinterCamera(Camera):
         from .views import async_proxy_mjpeg_stream
 
         return await async_proxy_mjpeg_stream(request, self.runtime)
+
+
+class Generic3DPrinterStreamCamera(_PrinterCamera):
+    """A printer camera that is a native video stream, played by Home Assistant."""
+
+    _attr_supported_features = CameraEntityFeature.STREAM
+
+    def __init__(self, coordinator: PrinterCoordinator) -> None:
+        """Bind the camera, with no stream started yet."""
+        super().__init__(coordinator)
+        #: The URL the last start handed out, which a still reuses while it plays.
+        self._source: str | None = None
+
+    async def stream_source(self) -> str | None:
+        """Start the printer's stream and return its URL, or ``None`` when it fails."""
+        try:
+            self._source = await self.runtime.adapter.async_stream_source()
+        except ProtocolError as err:
+            _LOGGER.debug("%s: the stream did not start: %s", self.runtime.config.name, err)
+            self._source = None
+        return self._source
+
+    async def async_refresh_providers(self, *, write_state: bool = True) -> None:
+        """Skip HA's WebRTC probe, which would start the printer's capture with nobody watching."""
+
+    async def async_camera_image(
+        self, width: int | None = None, height: int | None = None
+    ) -> bytes | None:
+        """Return one still, from the stream already running when it gives one.
+        Restarting the capture cuts off whoever is watching."""
+        if self._source is not None and (still := await self._async_still(self._source, width, height)):
+            return still
+        source = await self.stream_source()
+        return await self._async_still(source, width, height) if source is not None else None
+
+    async def _async_still(self, source: str, width: int | None, height: int | None) -> bytes | None:
+        try:
+            return await async_still_from_stream(self.hass, source, width, height)
+        except Exception as err:  # noqa: BLE001 - no ffmpeg, or a stream that refused it
+            _LOGGER.debug("%s: no still from the stream: %s", self.runtime.config.name, err)
+            return None

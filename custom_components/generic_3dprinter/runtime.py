@@ -288,9 +288,40 @@ class PrinterRuntime:
         return Capability.CAMERA in self.adapter.capabilities
 
     @property
+    def has_stream(self) -> bool:
+        """Return ``True`` when this printer's camera is a stream Home Assistant plays."""
+        return Capability.CAMERA_STREAM in self.adapter.capabilities
+
+    @property
+    def camera_kind(self) -> str | None:
+        """Return ``"mjpeg"``, ``"stream"`` or ``None``, for the card."""
+        if self.has_stream:
+            return "stream"
+        if self.has_camera:
+            return "mjpeg"
+        return None
+
+    def camera_entity_id(self) -> str | None:
+        """Return the entity id of this printer's camera, once it is registered."""
+        from homeassistant.helpers import entity_registry as er
+
+        from .const import DOMAIN
+
+        return er.async_get(self.hass).async_get_entity_id(
+            "camera", DOMAIN, f"{self.entry_id}_camera"
+        )
+
+    @property
     def has_web_ui(self) -> bool:
         """Return ``True`` when this printer serves a web page worth proxying."""
         return Capability.WEB_UI in self.adapter.capabilities
+
+    def model_profile(self) -> dict[str, object] | None:
+        """Return which model profile applies, and whether it was measured."""
+        profile = self.adapter.model_profile
+        if profile is None:
+            return None
+        return {"id": profile.id, "name": profile.name, "verified": profile.verified}
 
     async def async_stop(self) -> None:
         """Stop background work owned by this runtime."""
@@ -330,7 +361,9 @@ class PrinterRuntime:
             "serial": self.snapshot.serial,
             "connected": self.snapshot.connected,
             "last_error": self.last_error,
-            "camera": self.has_camera,
+            "camera": self.camera_kind is not None,
+            "camera_kind": self.camera_kind,
+            "camera_entity_id": self.camera_entity_id() if self.camera_kind else None,
             "web_ui": self.has_web_ui,
             "camera_url": camera_url,
             "snapshot_url": snapshot_url,
@@ -343,6 +376,7 @@ class PrinterRuntime:
                 for feature in self.adapter.unsafe_features
             ],
             "filament_presets": [dict(item) for item in self.adapter.filament_presets],
+            "model_profile": self.model_profile(),
             "printer": self.snapshot.as_dict(),
         }
 

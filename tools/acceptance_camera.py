@@ -18,6 +18,8 @@ import sys
 import time
 from pathlib import Path
 
+from acceptance_kit import Report
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "custom_components"))
 
@@ -67,12 +69,8 @@ async def run(host: str, seconds: float, camera_out: Path | None) -> int:
     print(f"    {distinct} distinct payloads")
     print(f"    sizes: min={min(len(f) for f in frames)} max={max(len(f) for f in frames)}")
 
-    ok = True
-
-    def check(label: str, passed: bool, detail: str = "") -> None:
-        nonlocal ok
-        ok = ok and passed
-        print(f"  [{'PASS' if passed else 'FAIL'}] {label}{f' - {detail}' if detail else ''}")
+    report = Report()
+    check = report.check
 
     check("more than one frame arrived", len(frames) > 1, f"{len(frames)}")
     check("the frames are all distinct", distinct == len(frames), f"{distinct}/{len(frames)}")
@@ -83,8 +81,7 @@ async def run(host: str, seconds: float, camera_out: Path | None) -> int:
         camera_out.write_bytes(frames[-1])
         print(f"[3] wrote the last frame to {camera_out}")
 
-    print("\nall checks passed" if ok else "\nsome checks failed")
-    return 0 if ok else 1
+    return report.summary()
 
 
 def main() -> int:

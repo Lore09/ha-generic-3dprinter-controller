@@ -421,7 +421,7 @@ class OctoPrintProtocol(Protocol):
 
     # -------------------------------------------------------------------- reads
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot, read from ``/api/printer`` and ``/api/job``.
 
         The layer counts, the speed and flow factors, the fan duty, the axis position

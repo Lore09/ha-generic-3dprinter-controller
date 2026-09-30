@@ -20,7 +20,6 @@ from collections.abc import AsyncIterator
 import aiohttp
 import pytest
 
-from custom_components.generic_3dprinter import discovery
 from custom_components.generic_3dprinter.adapters import elegoo_cc2 as cc2
 from custom_components.generic_3dprinter.const import (
     Capability,
@@ -251,7 +250,7 @@ def test_file_list_skips_folders_and_keeps_sizes() -> None:
 
 
 def test_the_live_discovery_reply_is_understood() -> None:
-    found = discovery.parse_cc2_reply(LIVE_DISCOVERY_REPLY, "192.168.128.146")
+    found = cc2.parse_cc2_reply(LIVE_DISCOVERY_REPLY, "192.168.128.146")
     assert found is not None
     assert found.protocol is ProtocolId.ELEGOO_CC2
     assert found.host == "192.168.128.146"
@@ -259,8 +258,8 @@ def test_the_live_discovery_reply_is_understood() -> None:
     assert found.model == "Centauri Carbon 2"
     assert found.lan_only is False
     assert found.access_code_set is False
-    assert discovery.parse_cc2_reply({"result": {}}, "1.2.3.4") is None
-    assert discovery.parse_cc2_reply({"Data": {}}, "1.2.3.4") is None
+    assert cc2.parse_cc2_reply({"result": {}}, "1.2.3.4") is None
+    assert cc2.parse_cc2_reply({"Data": {}}, "1.2.3.4") is None
 
 
 def test_the_hint_names_cloud_mode_when_discovery_saw_it() -> None:
@@ -681,7 +680,7 @@ async def test_cloud_mode_is_named_instead_of_timing_out_silently(
     cc2_printer: FakeCC2Printer, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def cloud(host: str | None = None, timeout: float = 0) -> DiscoveryResult:
-        return discovery.parse_cc2_reply(LIVE_DISCOVERY_REPLY, "127.0.0.1")  # type: ignore[return-value]
+        return cc2.parse_cc2_reply(LIVE_DISCOVERY_REPLY, "127.0.0.1")  # type: ignore[return-value]
 
     monkeypatch.setattr(cc2, "async_discover_cc2", cloud)
     cc2_printer.answering = False
@@ -737,7 +736,7 @@ async def test_the_serial_is_discovered_when_not_configured(
 ) -> None:
     async def lan(host: str | None = None, timeout: float = 0) -> DiscoveryResult:
         reply = {"id": 0, "result": {**LIVE_DISCOVERY_REPLY["result"], "lan_status": 1}}
-        return discovery.parse_cc2_reply(reply, "127.0.0.1")  # type: ignore[return-value]
+        return cc2.parse_cc2_reply(reply, "127.0.0.1")  # type: ignore[return-value]
 
     monkeypatch.setattr(cc2, "async_discover_cc2", lan)
     adapter = make_adapter(cc2_printer, session, serial=None)
@@ -835,7 +834,7 @@ def _config(**extra: object) -> PrinterConfig:
 def _discovered(**result: object):
     async def fake(host: str | None = None, timeout: float = 0) -> DiscoveryResult | None:
         reply = {"id": 0, "result": {**LIVE_DISCOVERY_REPLY["result"], **result}}
-        return discovery.parse_cc2_reply(reply, host or "")
+        return cc2.parse_cc2_reply(reply, host or "")
 
     return fake
 
@@ -900,8 +899,8 @@ async def test_discovery_reads_a_reply_over_udp(monkeypatch: pytest.MonkeyPatch)
 
     transport, _ = await loop.create_datagram_endpoint(Responder, local_addr=("127.0.0.1", 0))
     try:
-        monkeypatch.setattr(discovery, "CC2_DISCOVERY_PORT", transport.get_extra_info("sockname")[1])
-        found = await discovery.async_discover_cc2("127.0.0.1", timeout=2)
+        monkeypatch.setattr(cc2, "CC2_DISCOVERY_PORT", transport.get_extra_info("sockname")[1])
+        found = await cc2.async_discover_cc2("127.0.0.1", timeout=2)
     finally:
         transport.close()
     assert json.loads(received[0]) == {"id": 0, "method": 7000}

@@ -1,11 +1,5 @@
-"""Switches for the printer's own lights.
-
-A printer's chamber light is the one thing a user reaches for constantly and the
-one thing most protocols expose as a plain on/off. The switch exists only when the
-printer grants ``SET_LIGHT``, and its state comes from the snapshot's light set
-rather than from a local flag, so a light turned on at the printer's own panel
-shows as on here.
-"""
+"""Switches for the printer's lights, auto-refill and the timelapse.
+A light's state comes from the snapshot, so one switched at the printer shows here."""
 
 from __future__ import annotations
 
@@ -27,6 +21,7 @@ from .entity import (
     granted_capabilities,
 )
 from .models import FilamentSystem
+from .timelapse import TimelapseLightSwitch, TimelapseSwitch
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -58,6 +53,11 @@ async def async_setup_entry(
             Generic3DPrinterSwitch(coordinator, description)
             for description in SWITCH_DESCRIPTIONS
         )
+    if entry.runtime_data.camera_kind is not None:
+        timelapse = TimelapseSwitch(coordinator)
+        async_add_entities([timelapse])
+        if granted[Capability.SET_LIGHT]:
+            async_add_entities([TimelapseLightSwitch(coordinator, timelapse.timelapse)])
     if granted[Capability.SET_AUTO_REFILL]:
 
         def build(filament: FilamentSystem) -> FilamentEntityFactories:
@@ -70,6 +70,8 @@ async def async_setup_entry(
 
 class Generic3DPrinterSwitch(Generic3DPrinterEntity, SwitchEntity):
     """One switchable light on the printer."""
+
+    _command = Command.SET_LIGHT
 
     entity_description: Generic3DPrinterSwitchDescription
 
@@ -103,6 +105,8 @@ class Generic3DPrinterSwitch(Generic3DPrinterEntity, SwitchEntity):
 
 class AutoRefillSwitch(Generic3DPrinterEntity, SwitchEntity):
     """Whether the multi-material unit switches to a matching slot when one runs out."""
+
+    _command = Command.SET_AUTO_REFILL
 
     def __init__(self, coordinator: PrinterCoordinator) -> None:
         """Bind the switch to the printer's multi-material system."""

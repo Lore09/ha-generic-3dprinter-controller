@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+
+* **A timelapse of every print**, for any printer with a camera. A Timelapse switch
+  records a frame per layer, or every 30 seconds without layers, and turns them into
+  an MP4 in the media folder when the job ends, with a `generic_3dprinter_timelapse`
+  event pointing at it. A Timelapse light switch lights a job that starts in the
+  dark and switches the light off again after. A still from a stream camera now reuses the running stream
+  instead of restarting the printer's capture, which cut off whoever was watching.
+* **The Anycubic Kobra 3, Kobra 4, Kobra S1 and Kobra X**, in LAN mode, added with
+  their address alone. Status, temperatures, fans, speed, the light, pause, resume
+  and stop; home and jog on the Kobra X; the Kobra X's built-in four-colour changer
+  and any ACE as a multi-material unit with auto-feed; the camera as a stream; the
+  file list; and starting a print as an opt-in. On the Kobra 3, 4 and S1,
+  temperatures, fans and speed apply only during a print, and the card says so.
+  The Kobra X is checked on a printer, firmware 2.0.1.9, except printing, speed and
+  auto-feed. The other models are built from other projects' published work and
+  marked unverified; `tools/acceptance_kobra.py` checks one.
+* **Controls say why they are refused.** A printer now reports the commands it
+  supports but will not take right now, with the reason, such as a Centauri Carbon
+  2 that moves its head only while idle. The card draws those controls disabled and
+  shows the reason; buttons, numbers and switches carry it as a `blocked_reason`
+  attribute for automations; and a refused command never reaches the printer. Every
+  printer refuses to move, start a print or change filament during a job, which the
+  card used to enforce on its own.
+* **Discovery finds every printer that answers.** When several do, the setup asks
+  which one to add, and printers already set up are not offered again. A printer
+  that reports a serial number is keyed by it, so a new address does not add it twice.
+* **Printers whose camera is a video stream** are played by Home Assistant, and the
+  card shows them with Home Assistant's own camera card. No printer uses this yet.
+* One protocol can now serve several printer models, each with the controls it
+  really has, and the card marks a model nobody has measured as unverified.
+* MQTT over TLS, for printers whose broker needs it.
+
+**Fixed**
+
+* A second connection attempt to a Centauri Carbon that was already connected
+  opened a second socket and kept one of the printer's five client slots until the
+  printer timed it out.
+* `tools/acceptance_cc2.py` failed to start, and `tools/acceptance_sdcp.py` crashed
+  on an unreachable printer.
+
+**Removed**
+
+* PrusaLink, which was listed but never installed and so never reached the menu.
+
+**Development**
+
+* `requirements-test.txt` pins the test harness. The card tests need Node 22.12.
+* Every adapter runs one shared contract suite against its fake printer.
+
 ## 0.5.1
 
 **Fixed**

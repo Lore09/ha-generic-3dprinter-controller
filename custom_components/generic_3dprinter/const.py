@@ -121,6 +121,9 @@ class Capability(StrEnum):
     FILE_UPLOAD = "file_upload"
     FILE_DELETE = "file_delete"
     CAMERA = "camera"
+    #: The camera is a native video stream, such as H.264 over HTTP-FLV, which Home
+    #: Assistant plays itself. A printer declares this or ``CAMERA``, never both.
+    CAMERA_STREAM = "camera_stream"
     WEB_UI = "web_ui"
     #: The printer reports the slots of a multi-material unit, such as Elegoo's
     #: CANVAS, and what is loaded in each. A printer that can express this but has
@@ -183,16 +186,14 @@ class ProtocolId(StrEnum):
 
     SDCP_CC1 = "sdcp_cc1"
     ELEGOO_CC2 = "elegoo_cc2"
+    ANYCUBIC_KOBRA = "anycubic_kobra"
     MOONRAKER = "moonraker"
     OCTOPRINT = "octoprint"
-    PRUSALINK = "prusalink"
     DUET = "duet"
     WEB_ONLY = "web_only"
 
 
-#: Commands that ask the machine to change what it is doing. Only these are
-#: refused while an unsafe-gated printer is working, because interrupting a job
-#: destroys the part and, on some firmware, the printer's control daemon.
+#: Commands that change what the machine does; refused during a job by the default state rule.
 STATE_CHANGING_COMMANDS: Final[frozenset[Command]] = frozenset(
     {
         Command.START_PRINT,
@@ -221,3 +222,15 @@ class UnsafeFeature:
     gates: frozenset[Capability]
     evidence: str
 
+
+
+@dataclass(frozen=True, slots=True)
+class ModelProfile:
+    """One printer model among several on one protocol, granting only what that model has.
+    ``verified`` says whether this project measured it on hardware; the card shows it."""
+
+    id: str
+    name: str
+    capabilities: frozenset[Capability]
+    verified: bool = False
+    evidence: str = ""

@@ -29,22 +29,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-CHECKS: list[tuple[str, bool, str]] = []
+from acceptance_kit import Report  # noqa: E402 - tools/ is the script's own directory
 
-
-def check(label: str, ok: bool, detail: str = "") -> bool:
-    """Record and print one check."""
-    CHECKS.append((label, ok, detail))
-    mark = "PASS" if ok else "FAIL"
-    print(f"  [{mark}] {label}{f' - {detail}' if detail else ''}")
-    return ok
+REPORT = Report()
+check = REPORT.check
 
 
 async def run(host: str, access_code: str | None, camera_out: Path | None, listen: float) -> int:
     import aiohttp
 
     from custom_components.generic_3dprinter.const import Capability, ProtocolId
-    from custom_components.generic_3dprinter.discovery import async_discover_cc2
+    from custom_components.generic_3dprinter.adapters.elegoo_cc2 import async_discover_cc2
     from custom_components.generic_3dprinter.protocols import ProtocolError, parse_config
     from custom_components.generic_3dprinter.registry import build_adapter, get_registration
 
@@ -134,9 +129,7 @@ async def run(host: str, access_code: str | None, camera_out: Path | None, liste
         finally:
             await adapter.async_teardown()
 
-    failed = [label for label, ok, _ in CHECKS if not ok]
-    print(f"\n{len(CHECKS) - len(failed)} of {len(CHECKS)} checks passed")
-    return 1 if failed else 0
+    return REPORT.summary()
 
 
 def main() -> int:

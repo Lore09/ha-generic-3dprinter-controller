@@ -13,12 +13,14 @@ the adapter inventing a number.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any, NewType
 
-from .const import Capability, LightChannel, PrintState, ProtocolId
+from .const import Capability, Command, LightChannel, PrintState, ProtocolId
 
 #: Branded scalars. At runtime these are floats; the brand is documentation the
 #: type checker enforces, because Bambu and Anycubic report remaining time in
@@ -258,6 +260,10 @@ class PrinterSnapshot:
     serial: str | None = None
     errors: tuple[str, ...] = ()
 
+    # --- state rules
+    #: Commands supported but refused now, with the reason; filled by the base class.
+    blocked: Mapping[Command, str] = field(default_factory=lambda: MappingProxyType({}))
+
     @property
     def idle(self) -> bool:
         """Return ``True`` when the machine is idle.
@@ -314,6 +320,7 @@ class PrinterSnapshot:
             "firmware": self.firmware,
             "serial": self.serial,
             "errors": list(self.errors),
+            "blocked": {command.value: reason for command, reason in self.blocked.items()},
         }
 
 

@@ -13,10 +13,11 @@ refused before any vendor code runs.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any, Final
+import re
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -29,12 +30,26 @@ from .const import (
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
     Capability,
+    STATE_CHANGING_COMMANDS,
     Command,
+    ModelProfile,
+    PrintState,
     ProtocolId,
     UnsafeFeature,
 )
 from .models import FileEntry, PrinterSnapshot
 from .validation import ParamError, validate_params
+
+if TYPE_CHECKING:
+    from .discovery import DiscoveryResult
+
+_SERIAL: Final = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def valid_serial(serial: str) -> bool:
+    """Whether a serial is safe in an MQTT topic: letters, digits, '-' and '_' only."""
+    return _SERIAL.fullmatch(serial) is not None
+
 
 COMMAND_CAPABILITY: Final[Mapping[Command, Capability]] = MappingProxyType(
     {
@@ -118,6 +133,46 @@ class UnsafeCommandError(ProtocolError):
             f"Enable it in the integration options if you accept the risk."
         )
         self.feature = feature
+
+
+class CommandBlockedError(ProtocolError):
+    """The printer supports the command but will not take it in its current state."""
+
+    def __init__(self, command: Command, reason: str) -> None:
+        """Name the command and the printer's reason."""
+        super().__init__(f"{command.value} is not possible now: {reason}")
+        self.command = command
+        self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class BlockRule:
+    """Commands a printer refuses while ``when`` holds for its latest snapshot.
+    The card, the entities and :meth:`Protocol.async_send` all read the same computed set."""
+
+    commands: frozenset[Command]
+    when: Callable[[PrinterSnapshot], bool]
+    reason: str
+
+
+def job_active(snapshot: PrinterSnapshot) -> bool:
+    """Return ``True`` while a job is being prepared, printed or held."""
+    return snapshot.print_state in (PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED)
+
+
+def not_idle(snapshot: PrinterSnapshot) -> bool:
+    """Return ``True`` unless the printer says it is idle."""
+    return snapshot.print_state is not PrintState.IDLE
+
+
+#: Every printer refuses to move, start a job or swap filament while a job runs.
+DEFAULT_BLOCK_RULES: Final[tuple[BlockRule, ...]] = (
+    BlockRule(
+        STATE_CHANGING_COMMANDS,
+        when=job_active,
+        reason="the printer is busy with a job",
+    ),
+)
 
 
 def _as_int(value: Any, default: int, minimum: int, maximum: int, label: str) -> int:
@@ -274,10 +329,8 @@ def parse_config(
         web_url = validate_url(web_url, label="web ui url")
 
     serial = str(data.get("serial") or "").strip() or None
-    if serial is not None and (len(serial) > 64 or not serial.isalnum()):
-        # The serial becomes part of an MQTT topic, where "/", "+" and "#" have
-        # meaning, so only the letters and digits a real serial is made of pass.
-        raise ConfigError("serial number must be letters and digits only")
+    if serial is not None and not valid_serial(serial):
+        raise ConfigError("serial number must be letters, digits, '-' and '_' only")
 
     credentials: dict[str, str] = {}
     for key in CREDENTIAL_KEYS:
@@ -319,6 +372,9 @@ def parse_config(
 class Protocol(ABC):
     """Transport adapter for one printer. One instance per config entry."""
 
+    #: State rules: extend the defaults, own rules first; the first that blocks gives the reason.
+    block_rules: tuple[BlockRule, ...] = DEFAULT_BLOCK_RULES
+
     def __init__(
         self,
         config: PrinterConfig,
@@ -326,12 +382,16 @@ class Protocol(ABC):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
-        """Store the configuration, the shared HTTP session and the granted set."""
+        """Store the config, the HTTP session and the granted set, which ``models`` narrows."""
         self._config = config
         self._session = session
         self._granted = granted
         self._unsafe = unsafe
+        self._models = models
+        self._model_id: str | None = None
+        self._last_snapshot: PrinterSnapshot | None = None
 
     @property
     def config(self) -> PrinterConfig:
@@ -345,8 +405,27 @@ class Protocol(ABC):
 
     @property
     def capabilities(self) -> frozenset[Capability]:
-        """Return the capabilities this printer grants, after every gate."""
-        return self._granted
+        """Return the granted capabilities, narrowed to the reached model's profile when known."""
+        profile = self.model_profile
+        if profile is None:
+            return self._granted
+        return self._granted & profile.capabilities
+
+    @property
+    def model_id(self) -> str | None:
+        """Return the model id the printer reported, if the adapter has one."""
+        return self._model_id
+
+    @property
+    def model_profile(self) -> ModelProfile | None:
+        """Return the profile of the model this adapter reached, if it is known."""
+        if self._model_id is None:
+            return None
+        return next((item for item in self._models if item.id == self._model_id), None)
+
+    def _set_model_id(self, model_id: str | None) -> None:
+        """Record which model the printer says it is. Called by an adapter in setup."""
+        self._model_id = model_id
 
     @property
     def unsafe_features(self) -> tuple[UnsafeFeature, ...]:
@@ -355,13 +434,18 @@ class Protocol(ABC):
 
     @property
     def filament_presets(self) -> tuple[Mapping[str, Any], ...]:
-        """Return the filaments the card offers when a slot's filament is set.
-
-        Each is ``material``, ``name``, ``min_temp``, ``max_temp`` and ``brands``.
-        Empty unless the printer can record a slot's filament and keeps a list of
-        its own; the card then asks for the material in words.
-        """
+        """Return the filaments the card offers for a slot: material, name, temps, brands."""
         return ()
+
+    @classmethod
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Look for this protocol's printers on the network. Read-only; the default finds none."""
+        return []
+
+    @classmethod
+    async def async_identify(cls, host: str, timeout: float) -> DiscoveryResult | None:
+        """Ask ``host`` if it is one of this protocol's printers; ``None`` means no. Read-only."""
+        return None
 
     @classmethod
     async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
@@ -375,11 +459,7 @@ class Protocol(ABC):
 
     @abstractmethod
     async def async_setup(self) -> None:
-        """Open what this protocol needs and verify the credential once.
-
-        Idempotent. Raises :class:`UnreachableError` or :class:`AuthError`. Called
-        at entry setup and after a failed read, never per poll.
-        """
+        """Open what this protocol needs and check the credential once. Idempotent, not per poll."""
         raise NotImplementedError
 
     @abstractmethod
@@ -387,13 +467,39 @@ class Protocol(ABC):
         """Close sockets and subscriptions. Idempotent."""
         raise NotImplementedError
 
-    @abstractmethod
-    async def async_read(self) -> PrinterSnapshot:
-        """Return one complete snapshot of printer state.
+    @property
+    def last_snapshot(self) -> PrinterSnapshot | None:
+        """Return the snapshot of the last successful read, if any."""
+        return self._last_snapshot
 
-        Raises :class:`UnreachableError` or :class:`AuthError`. Never raises for a
-        field the protocol cannot express: that field stays ``None``.
-        """
+    async def async_read(self) -> PrinterSnapshot:
+        """Return one snapshot with the granted capabilities and state rules applied.
+        Raises UnreachableError or AuthError; adapters implement :meth:`_async_read`."""
+        snapshot = await self._async_read()
+        snapshot = replace(snapshot, capabilities=self.capabilities)
+        profile = self.model_profile
+        if profile is not None:
+            snapshot = replace(snapshot, model=profile.name)
+        elif self._models and self._model_id is not None:
+            snapshot = replace(snapshot, errors=(*snapshot.errors, f"unknown model {self._model_id}"))
+        snapshot = replace(snapshot, blocked=MappingProxyType(self._blocked(snapshot)))
+        self._last_snapshot = snapshot
+        return snapshot
+
+    def _blocked(self, snapshot: PrinterSnapshot) -> dict[Command, str]:
+        """Return the granted commands the rules refuse for ``snapshot``."""
+        blocked: dict[Command, str] = {}
+        for rule in self.block_rules:
+            if not rule.when(snapshot):
+                continue
+            for command in sorted(rule.commands):
+                if command_capability(command) in snapshot.capabilities:
+                    blocked.setdefault(command, rule.reason)
+        return blocked
+
+    @abstractmethod
+    async def _async_read(self) -> PrinterSnapshot:
+        """Read the printer once. A field the protocol cannot express stays ``None``."""
         raise NotImplementedError
 
     def async_subscribe(self) -> AsyncIterator[PrinterSnapshot] | None:
@@ -413,6 +519,15 @@ class Protocol(ABC):
             validated = validate_params(command, params)
         except ParamError as err:
             raise ProtocolError(str(err)) from err
+
+        # Rules need a state: read once before the first command, and re-read before refusing,
+        # since the last snapshot may be a poll old.
+        snapshot = self._last_snapshot
+        if snapshot is None or command in snapshot.blocked:
+            snapshot = await self.async_read()
+        reason = snapshot.blocked.get(command)
+        if reason is not None:
+            raise CommandBlockedError(command, reason)
 
         await self._async_dispatch(command, validated)
 
@@ -442,12 +557,13 @@ class Protocol(ABC):
         """Upload one G-code file and return its stored entry."""
         raise NotImplementedError
 
-    async def async_camera_frame(self) -> bytes:
-        """Return one complete JPEG frame.
+    async def async_stream_source(self) -> str:
+        """Start the printer's video stream if needed and return its URL (``CAMERA_STREAM`` only).
+        Called when someone plays the stream, since starting it may switch the camera on."""
+        raise UnreachableError("this protocol has no video stream")
 
-        Adapters without a camera are never called, because ``CAMERA`` is absent
-        from their capability set.
-        """
+    async def async_camera_frame(self) -> bytes:
+        """Return one complete JPEG frame (only called when ``CAMERA`` is granted)."""
         raise UnreachableError("this protocol has no camera")
 
     def __repr__(self) -> str:

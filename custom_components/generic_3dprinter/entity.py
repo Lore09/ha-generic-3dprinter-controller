@@ -18,6 +18,7 @@ when the printer first reports them, by :func:`async_follow_filament`.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -26,7 +27,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DATA_COORDINATORS, DOMAIN, MANUFACTURER, Capability
+from .const import DATA_COORDINATORS, DOMAIN, MANUFACTURER, Capability, Command
 from .coordinator import PrinterCoordinator
 from .models import FilamentSystem
 from .protocols import PrinterConfig
@@ -92,6 +93,9 @@ class Generic3DPrinterEntity(CoordinatorEntity[PrinterCoordinator]):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    #: The command this entity sends, for a control. Its state rule is reported as
+    #: the ``blocked_reason`` attribute while the printer refuses it.
+    _command: Command | None = None
 
     def __init__(self, coordinator: PrinterCoordinator, key: str) -> None:
         """Bind the entity to its coordinator, its device and its translation key.
@@ -115,8 +119,22 @@ class Generic3DPrinterEntity(CoordinatorEntity[PrinterCoordinator]):
 
     @property
     def available(self) -> bool:
-        """Return ``False`` while the coordinator's last poll failed."""
+        """Return ``False`` while the last poll failed. A refused control stays available."""
         return self.coordinator.last_update_success
+
+    @property
+    def blocked_reason(self) -> str | None:
+        """Return why the printer refuses this entity's command now, if it does."""
+        snapshot = self.coordinator.data
+        if self._command is None or snapshot is None:
+            return None
+        return snapshot.blocked.get(self._command)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Report the reason a control is refused, so automations can read it."""
+        reason = self.blocked_reason
+        return {"blocked_reason": reason} if reason is not None else None
 
 
 type FilamentEntityFactories = Mapping[str, Callable[[], Entity]]

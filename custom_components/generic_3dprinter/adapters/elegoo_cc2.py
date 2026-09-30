@@ -54,8 +54,8 @@ from typing import Any, Final
 
 import aiohttp
 
-from ..const import Capability, Command, LightChannel, PrintState, ProtocolId, UnsafeFeature
-from ..discovery import DiscoveryResult, async_discover_cc2
+from ..const import Capability, Command, LightChannel, ModelProfile, PrintState, ProtocolId, UnsafeFeature
+from ..discovery import DiscoveryResult, async_probe_udp
 from ..models import (
     Axis,
     Celsius,
@@ -71,13 +71,16 @@ from ..models import (
 from ..mjpeg import jpeg_frames
 from ..mqtt_client import MqttClient, MqttError, MqttRefusedError
 from ..protocols import (
+    DEFAULT_BLOCK_RULES,
     AuthError,
+    BlockRule,
     CommandRejectedError,
     ConfigError,
     PrinterConfig,
     Protocol,
     ProtocolError,
     UnreachableError,
+    not_idle,
 )
 from .elegoo_canvas import (
     ACTIVITY_BY_SUB_STATUS,
@@ -248,6 +251,66 @@ FAN_KEYS: Final[Mapping[str, str]] = MappingProxyType(
 #: The fans the printer can be told to set. The hotend and board fans are
 #: reported, and run under the firmware's own control.
 SETTABLE_FANS: Final = ("model", "auxiliary", "chamber")
+
+
+#: The discovery request Elegoo's slicer sends, and the port it goes to. The reply
+#: carries the serial number every topic is built from, and the network mode.
+CC2_DISCOVERY_PORT: Final = 52700
+CC2_DISCOVERY_PROBE: Final = b'{"id": 0, "method": 7000}'
+
+
+def _flag(value: Any) -> bool | None:
+    """Read a discovery flag the printer may send as an integer or a boolean."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value == 1
+    return None
+
+
+def parse_cc2_reply(reply: dict[str, Any], sender: str) -> DiscoveryResult | None:
+    """Return what a Centauri Carbon 2 said about itself, or ``None``.
+    The reply has no address, so the datagram's sender is the printer."""
+    result = reply.get("result")
+    if not isinstance(result, dict):
+        return None
+    serial = str(result.get("sn") or "").strip()
+    if not serial or not sender:
+        return None
+    lan_only = _flag(result.get("lan_status"))
+    access_code_set = _flag(result.get("token_status"))
+    evidence = [f"answered the UDP discovery probe on port {CC2_DISCOVERY_PORT}"]
+    if lan_only is False:
+        evidence.append("the printer is in cloud mode, not LAN-only mode")
+    return DiscoveryResult(
+        host=sender,
+        protocol=ProtocolId.ELEGOO_CC2,
+        candidates=[ProtocolId.ELEGOO_CC2],
+        mainboard_id=serial,
+        firmware=None,
+        model=str(result.get("machine_model") or "") or None,
+        evidence=evidence,
+        lan_only=lan_only,
+        access_code_set=access_code_set,
+        prefill={"serial": serial},
+    )
+
+
+def _is_cc2_reply(payload: dict[str, Any]) -> bool:
+    return isinstance(payload.get("result"), dict) and "sn" in payload["result"]
+
+
+async def async_discover_cc2(
+    host: str | None = None, timeout: float = DISCOVERY_TIMEOUT
+) -> DiscoveryResult | None:
+    """Ask for a Centauri Carbon 2 as Elegoo's slicer does; the only source of the serial
+    every topic needs, answered even while another client holds a session."""
+    target = (host or "255.255.255.255", CC2_DISCOVERY_PORT)
+    answer = await async_probe_udp(CC2_DISCOVERY_PROBE, target, timeout, _is_cc2_reply)
+    if answer is None:
+        return None
+    reply, sender = answer
+    return parse_cc2_reply(reply, sender)
 
 
 class _NoAnswerError(ProtocolError):
@@ -465,6 +528,24 @@ def lan_only_hint(discovery: DiscoveryResult | None) -> str:
 class ElegooCC2Protocol(Protocol):
     """The Centauri Carbon 2 over its own MQTT broker, with the camera on HTTP."""
 
+    #: Moves and CANVAS slot changes collide with the firmware's own unless the printer is idle.
+    block_rules = (
+        BlockRule(
+            frozenset(
+                {
+                    Command.HOME,
+                    Command.JOG,
+                    Command.LOAD_FILAMENT,
+                    Command.UNLOAD_FILAMENT,
+                    Command.SET_FILAMENT,
+                }
+            ),
+            when=not_idle,
+            reason="the printer is not idle",
+        ),
+        *DEFAULT_BLOCK_RULES,
+    )
+
     def __init__(
         self,
         config: PrinterConfig,
@@ -472,9 +553,10 @@ class ElegooCC2Protocol(Protocol):
         *,
         granted: frozenset[Capability],
         unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
     ) -> None:
         """Create the adapter for one printer."""
-        super().__init__(config, session, granted=granted, unsafe=unsafe)
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._client: MqttClient | None = None
         self._heartbeat: asyncio.Task[None] | None = None
         self._serial = config.serial or ""
@@ -563,14 +645,20 @@ class ElegooCC2Protocol(Protocol):
     # ----------------------------------------------------------- config flow
 
     @classmethod
-    async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
-        """Learn the serial number and refuse a printer that is not in LAN-only mode.
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Broadcast the request Elegoo's slicer sends."""
+        found = await async_discover_cc2(timeout=timeout)
+        return [found] if found is not None else []
 
-        The discovery request is the one Elegoo's slicer sends; it is not a command.
-        A printer that does not answer it can still be added when its serial number
-        is entered by hand, because the probe is UDP and may be filtered between
-        networks.
-        """
+    @classmethod
+    async def async_identify(cls, host: str, timeout: float) -> DiscoveryResult | None:
+        """Send the slicer's request to one host."""
+        return await async_discover_cc2(host, timeout=timeout)
+
+    @classmethod
+    async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
+        """Learn the serial and refuse a printer not in LAN-only mode. A printer that ignores
+        the UDP probe can still be added with its serial typed in."""
         found = await async_discover_cc2(config.host, timeout=DISCOVERY_TIMEOUT)
         if found is None:
             if config.serial:
@@ -881,7 +969,7 @@ class ElegooCC2Protocol(Protocol):
 
     # ------------------------------------------------------------------- read
 
-    async def async_read(self) -> PrinterSnapshot:
+    async def _async_read(self) -> PrinterSnapshot:
         """Return one snapshot, reconnecting when the session is gone.
 
         Between full reads the snapshot comes from the merged deltas, which the
@@ -1056,25 +1144,12 @@ class ElegooCC2Protocol(Protocol):
         with suppress(_NoAnswerError):
             await self._async_send_checked(name, params, timeout=RESUME_REFUSAL_WINDOW)
 
-    def _require_idle(self, action: str) -> None:
-        """Refuse a motion command unless the printer says it is idle.
-
-        Moving the head during a print, or while the printer levels or loads
-        filament, collides with the firmware's own moves, so the only state in which
-        one is sent is the one where nothing else is moving.
-        """
-        status = _integer(_mapping(self._status.get("machine_status")).get("status"))
-        if status != 1:
-            raise ProtocolError(f"refusing to {action}: the printer is not idle")
-
     async def _async_home(self, params: Mapping[str, Any]) -> None:
         """Home the given axes, lower case as Elegoo's SDK sends them."""
-        self._require_idle("home")
         await self._async_send_unhurried("home", {"homed_axes": str(params["axes"]).lower()})
 
     async def _async_jog(self, params: Mapping[str, Any]) -> None:
         """Move one axis by a relative distance in millimetres."""
-        self._require_idle("move the head")
         await self._async_send_unhurried(
             "move", {"axes": str(params["axis"]).lower(), "distance": float(params["distance"])}
         )
@@ -1124,7 +1199,6 @@ class ElegooCC2Protocol(Protocol):
 
     async def _async_load_filament(self, params: Mapping[str, Any]) -> None:
         """Feed a slot into the nozzle: the printer heats, cuts the old filament, feeds."""
-        self._require_idle("load filament")
         target = self._require_slot(params)
         slot = self._canvas.slot(target["canvas_id"], target["tray_id"]) if self._canvas else None
         if slot is not None and not slot.loaded:
@@ -1134,14 +1208,12 @@ class ElegooCC2Protocol(Protocol):
 
     async def _async_unload_filament(self, params: Mapping[str, Any]) -> None:
         """Pull a slot's filament back out of the nozzle."""
-        self._require_idle("unload filament")
         target = self._require_slot(params)
         self._canvas_stale = True
         await self._async_send_unhurried("unload_filament", target)
 
     async def _async_set_filament(self, params: Mapping[str, Any]) -> None:
         """Record the filament in a slot, in the fields Elegoo's page sends."""
-        self._require_idle("change a slot's filament")
         target = self._require_slot(params)
         try:
             payload = edit_payload({**params, "unit": target["canvas_id"]})

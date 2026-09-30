@@ -24,21 +24,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "custom_components"))
 
-CHECKS: list[tuple[str, bool, str]] = []
+from acceptance_kit import Report  # noqa: E402 - tools/ is the script's own directory
 
-
-def check(label: str, ok: bool, detail: str = "") -> bool:
-    """Record and print one check."""
-    CHECKS.append((label, ok, detail))
-    mark = "PASS" if ok else "FAIL"
-    print(f"  [{mark}] {label}{f' - {detail}' if detail else ''}")
-    return ok
+REPORT = Report()
+check = REPORT.check
 
 
 async def run(host: str, camera_out: Path | None, keepalive: float) -> int:
     import aiohttp
 
-    from generic_3dprinter.protocols import parse_config
+    from generic_3dprinter.protocols import ProtocolError, parse_config
     from generic_3dprinter.registry import build_adapter, get_registration
     from generic_3dprinter.const import Capability, Command, ProtocolId
 
@@ -70,7 +65,11 @@ async def run(host: str, camera_out: Path | None, keepalive: float) -> int:
         )
 
         print("[2] async_setup")
-        await adapter.async_setup()
+        try:
+            await adapter.async_setup()
+        except ProtocolError as err:
+            check("socket opened", False, str(err))
+            return REPORT.summary()
         check("socket opened", True)
         print(f"    attributes: {json.dumps(dict(adapter.attributes), indent=6)[:1200]}")
 
@@ -159,11 +158,7 @@ async def run(host: str, camera_out: Path | None, keepalive: float) -> int:
         await adapter.async_teardown()
         check("socket closed", True)
 
-    failures = [item for item in CHECKS if not item[1]]
-    print(f"\n{len(CHECKS) - len(failures)}/{len(CHECKS)} checks passed")
-    for label, _ok, detail in failures:
-        print(f"  FAILED: {label} {detail}")
-    return 1 if failures else 0
+    return REPORT.summary()
 
 
 def main() -> int:
