@@ -172,5 +172,10 @@
         "data": { "name": "Contents", "description": "The file contents, base64 encoded." }
       }
     }
+  },
+  "exceptions": {
+    "wrong_printer": {
+      "message": "{host} answers as {model}, a resin printer, and this entry drives a Centauri Carbon. Remove it and add the printer as an Elegoo resin printer."
+    }
   }
 }

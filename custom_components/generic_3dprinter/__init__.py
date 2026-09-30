@@ -18,7 +18,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryError, ConfigEntryNotReady
 
 from .bridge import async_register_websocket_bridge
 from .const import (
@@ -32,7 +32,14 @@ from .const import (
 from .coordinator import PrinterCoordinator
 from .frontend import async_register_card, async_unregister_card
 from .proxy import WebProxyRuntime
-from .protocols import AuthError, ConfigError, UnreachableError, parse_config
+from .protocols import (
+    AuthError,
+    ConfigError,
+    ProtocolError,
+    UnreachableError,
+    WrongPrinterError,
+    parse_config,
+)
 from .registry import build_adapter, get_registration
 from .runtime import PrinterRuntime, create_session, remove_runtime, set_runtime
 from .security import TokenManager
@@ -87,6 +94,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await session.close()
         raise ConfigEntryNotReady(f"the printer refused the credential: {err}") from err
     except UnreachableError as err:
+        await session.close()
+        raise ConfigEntryNotReady(str(err)) from err
+    except WrongPrinterError as err:
+        # Retrying cannot help: the address is another kind of printer.
+        await adapter.async_teardown()
+        await session.close()
+        raise ConfigEntryError(
+            str(err),
+            translation_domain=DOMAIN,
+            translation_key="wrong_printer",
+            translation_placeholders={"host": config.host, "model": err.model or "an SDCP printer"},
+        ) from err
+    except ProtocolError as err:
+        await adapter.async_teardown()
         await session.close()
         raise ConfigEntryNotReady(str(err)) from err
 

@@ -64,6 +64,19 @@ async def printer_fixture():
         await server.stop()
 
 
+@pytest.fixture(name="resin_printer")
+async def resin_printer_fixture():
+    """Run a fake Saturn 4 Ultra 16K for the duration of one test."""
+    from tests.fake_resin_printer import FakeResinPrinter
+
+    server = FakeResinPrinter()
+    await server.start()
+    try:
+        yield server
+    finally:
+        await server.stop()
+
+
 @pytest.fixture(name="config_entry")
 async def config_entry_fixture(hass, printer):
     """Return an unloaded config entry pointing at the fake printer.

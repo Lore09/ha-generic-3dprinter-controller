@@ -96,6 +96,15 @@ class AuthError(ProtocolError):
     """The device answered and refused the credential."""
 
 
+class WrongPrinterError(ProtocolError):
+    """The address answers as a printer this protocol must not drive, such as a resin one."""
+
+    def __init__(self, message: str, *, model: str | None = None) -> None:
+        """Record the model the printer said it is, for the message the user reads."""
+        super().__init__(message)
+        self.model = model
+
+
 class ProtocolShapeError(ProtocolError):
     """The device answered with data this adapter cannot parse."""
 

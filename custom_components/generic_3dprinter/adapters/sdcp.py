@@ -56,7 +56,7 @@ from ..const import (
     UnsafeFeature,
 )
 from ..mjpeg import JPEG_EOI, JPEG_SOI, jpeg_frames  # noqa: F401 - re-exported
-from ..discovery import DiscoveryResult, async_probe_udp
+from ..discovery import DISCOVERY_TIMEOUT, DiscoveryResult, async_probe_udp
 from ..models import (
     Axis,
     Celsius,
@@ -71,10 +71,12 @@ from ..models import (
 )
 from ..protocols import (
     CommandRejectedError,
+    ConfigError,
     PrinterConfig,
     Protocol,
     ProtocolError,
     UnreachableError,
+    WrongPrinterError,
 )
 from .elegoo_canvas import parse_canvas
 
@@ -177,6 +179,18 @@ SET_CHAMBER_FIELD: Final = "TempTargetBox"
 _FAN_KEYS: Final[Mapping[str, str]] = MappingProxyType(
     {"model": "ModelFan", "auxiliary": "AuxiliaryFan", "chamber": "BoxFan"}
 )
+
+#: What each kind of SDCP printer slices for, in ``SupportFileType``. A Saturn 4
+#: Ultra 16K lists CTB and GOO, a Centauri Carbon lists gcode.
+RESIN_FILE_TYPES: Final = frozenset({"ctb", "cbddlp", "goo", "prz"})
+FDM_FILE_TYPES: Final = frozenset({"gcode"})
+#: Attributes and status fields only a resin printer reports, and only an FDM one.
+RESIN_ATTRIBUTES: Final = ("ReleaseFilmMax", "Resolution")
+RESIN_STATUS_KEYS: Final = ("TempOfUVLED", "ReleaseFilm", "TempOfTank")
+FDM_STATUS_KEYS: Final = ("TempOfNozzle", "TempOfHotbed")
+#: ``MachineName`` words, the last resort. ``XYZsize`` is never used: both report the same.
+RESIN_NAMES: Final = ("saturn", "mars")
+FDM_NAMES: Final = ("centauri", "neptune")
 
 
 # --------------------------------------------------------------------- parsing
@@ -314,6 +328,52 @@ def parse_status(status: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def sdcp_identity(reply: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the attributes of a discovery reply, with its ``Status`` when it has one.
+    The spec's reply is a flat ``Data``; a Saturn is reported to nest ``Attributes`` and ``Status``."""
+    data = reply.get("Data")
+    data = data if isinstance(data, Mapping) else reply
+    attributes = data.get("Attributes")
+    identity = dict(attributes if isinstance(attributes, Mapping) else data)
+    identity.pop("Status", None)
+    if isinstance(data.get("Status"), Mapping):
+        identity["Status"] = dict(data["Status"])
+    return identity
+
+
+def classify_sdcp(
+    attributes: Mapping[str, Any], status: Mapping[str, Any] | None = None
+) -> str | None:
+    """Return ``"resin"``, ``"fdm"`` or ``None`` for an SDCP printer, from what it said.
+    The file types decide first, then resin-only attributes, then the status, then the name."""
+    if status is None and isinstance(attributes.get("Status"), Mapping):
+        status = attributes["Status"]
+    types = attributes.get("SupportFileType")
+    types = [types] if isinstance(types, str) else types
+    if isinstance(types, Sequence):
+        lowered = {str(item).strip().lower() for item in types}
+        if lowered & RESIN_FILE_TYPES:
+            return "resin"
+        if lowered & FDM_FILE_TYPES:
+            return "fdm"
+    devices = attributes.get("DevicesStatus")
+    if any(key in attributes for key in RESIN_ATTRIBUTES) or (
+        isinstance(devices, Mapping) and "LCDStatus" in devices
+    ):
+        return "resin"
+    if isinstance(status, Mapping):
+        if any(key in status for key in RESIN_STATUS_KEYS):
+            return "resin"
+        if any(key in status for key in FDM_STATUS_KEYS):
+            return "fdm"
+    name = str(attributes.get("MachineName") or "").lower()
+    if any(word in name for word in RESIN_NAMES):
+        return "resin"
+    if any(word in name for word in FDM_NAMES):
+        return "fdm"
+    return None
+
+
 def parse_file_list(payload: Any) -> list[FileEntry]:
     """Normalise the ``FileList`` array into :class:`FileEntry` values."""
     if not isinstance(payload, Sequence) or isinstance(payload, (str, bytes)):
@@ -349,36 +409,28 @@ SDCP_DISCOVERY_PORT: Final = 3000
 SDCP_DISCOVERY_PROBE: Final = b"M99999"
 
 
+def _not_resin(reply: Mapping[str, Any]) -> bool:
+    return classify_sdcp(sdcp_identity(reply)) != "resin"
+
+
 async def async_discover_sdcp(timeout: float = 3.0) -> DiscoveryResult | None:
-    """Broadcast the Elegoo discovery probe and parse the first reply."""
+    """Broadcast the Elegoo discovery probe and parse the first reply from an FDM printer."""
     answer = await async_probe_udp(
-        SDCP_DISCOVERY_PROBE, ("255.255.255.255", SDCP_DISCOVERY_PORT), timeout
+        SDCP_DISCOVERY_PROBE, ("255.255.255.255", SDCP_DISCOVERY_PORT), timeout, accept=_not_resin
     )
     if answer is None:
         return None
-    reply, _sender = answer
-
-    data = reply.get("Data") if isinstance(reply.get("Data"), dict) else reply
-    if not isinstance(data, dict):
-        return None
-
-    mainboard = str(data.get("MainboardID") or "") or None
+    reply, sender = answer
+    data = sdcp_identity(reply)
     return DiscoveryResult(
-        host=str(data.get("MainboardIP") or "") or _reply_host(reply),
+        host=str(data.get("MainboardIP") or "") or sender,
         protocol=ProtocolId.SDCP_CC1,
         candidates=[ProtocolId.SDCP_CC1],
-        mainboard_id=mainboard,
+        mainboard_id=str(data.get("MainboardID") or "") or None,
         firmware=str(data.get("FirmwareVersion") or "") or None,
         model=str(data.get("MachineName") or data.get("Name") or "") or None,
         evidence=["answered the UDP discovery probe on port 3000"],
     )
-
-
-def _reply_host(reply: dict[str, Any]) -> str:
-    data = reply.get("Data")
-    if isinstance(data, dict):
-        return str(data.get("MainboardIP") or "")
-    return ""
 
 
 class SdcpSession(Protocol):
@@ -501,7 +553,21 @@ class SdcpSession(Protocol):
         self._forget_socket_state()
         self._reader = asyncio.create_task(self._async_read_frames())
         self._heartbeat = asyncio.create_task(self._async_heartbeat())
+        try:
+            await self._async_greet()
+        except BaseException:
+            # A socket whose printer was never checked must not carry the next request.
+            await self._async_close_socket()
+            raise
+        _LOGGER.debug(
+            "%s: SDCP ready, mainboard %s, firmware %s",
+            self.config.name,
+            self._mainboard_id or "(unknown)",
+            self._attributes.get("FirmwareVersion"),
+        )
 
+    async def _async_greet(self) -> None:
+        """Read the attributes, then the status, checking the printer after each."""
         await self._async_request(self.commands["attributes"])
         with suppress(TimeoutError):
             await asyncio.wait_for(self._attributes_event.wait(), timeout=PUSH_TIMEOUT)
@@ -513,12 +579,6 @@ class SdcpSession(Protocol):
         # cycle would otherwise be reported until somebody opened that page.
         await self._async_refresh_status()
         await self._check_identity()
-        _LOGGER.debug(
-            "%s: SDCP ready, mainboard %s, firmware %s",
-            self.config.name,
-            self._mainboard_id or "(unknown)",
-            self._attributes.get("FirmwareVersion"),
-        )
 
     @property
     def _connected(self) -> bool:
@@ -701,7 +761,7 @@ class SdcpSession(Protocol):
         cmd: int,
         data: Mapping[str, Any] | None = None,
         *,
-        timeout: float = ACK_TIMEOUT,
+        timeout: float | None = None,
     ) -> Mapping[str, Any] | None:
         """Send one request and wait for its acknowledgement frame.
 
@@ -715,6 +775,7 @@ class SdcpSession(Protocol):
         if ws is None or ws.closed:
             raise UnreachableError("the SDCP socket is not open")
 
+        timeout = ACK_TIMEOUT if timeout is None else timeout
         request_id, frame = self._frame(cmd, data)
         future: asyncio.Future[Mapping[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
@@ -837,6 +898,20 @@ class SdcpProtocol(SdcpSession):
         found = await async_discover_sdcp(timeout)
         return [found] if found is not None else []
 
+    @classmethod
+    async def async_prepare_config(cls, config: PrinterConfig) -> PrinterConfig:
+        """Refuse an address whose discovery reply is a resin printer's.
+        A printer that does not answer the probe is accepted, as before."""
+        answer = await async_probe_udp(
+            SDCP_DISCOVERY_PROBE, (config.host, SDCP_DISCOVERY_PORT), DISCOVERY_TIMEOUT
+        )
+        if answer is None:
+            return config
+        identity = sdcp_identity(answer[0])
+        if classify_sdcp(identity) == "resin":
+            raise ConfigError(_wrong_printer_message(config.host, identity.get("MachineName")))
+        return config
+
     def __init__(
         self,
         config: PrinterConfig,
@@ -876,6 +951,15 @@ class SdcpProtocol(SdcpSession):
         # A printer that went away comes back with its camera off.
         self._video_enabled = False
 
+    async def _check_identity(self) -> None:
+        """Close the socket and refuse a resin printer, which must never get 403 or 324.
+        A printer that has not said what it is yet is let through, as before."""
+        if classify_sdcp(self._attributes, self._status) != "resin":
+            return
+        model = str(self._attributes.get("MachineName") or "") or None
+        await self._async_close_socket()
+        raise WrongPrinterError(_wrong_printer_message(self.config.host, model), model=model)
+
     # ------------------------------------------------------------------- read
 
     async def _async_read(self) -> PrinterSnapshot:
@@ -897,6 +981,7 @@ class SdcpProtocol(SdcpSession):
         stale = self._status_at is not None and time.monotonic() - self._status_at > STATUS_MAX_AGE
         if not self._status or stale:
             await self._async_refresh_status()
+        await self._check_identity()
 
         parsed = parse_status(self._status)
         flags = parsed["current_status"]
@@ -1122,6 +1207,13 @@ class SdcpProtocol(SdcpSession):
             # Ask for the camera again next time: the printer may have restarted.
             self._video_enabled = False
             raise
+
+
+def _wrong_printer_message(host: str, model: Any) -> str:
+    return (
+        f"{host} answers as {model or 'an SDCP printer'}, a resin printer, and this entry "
+        "drives a Centauri Carbon. Add it as an Elegoo resin printer instead"
+    )
 
 
 async def _response_json(response: aiohttp.ClientResponse) -> Mapping[str, Any] | None:

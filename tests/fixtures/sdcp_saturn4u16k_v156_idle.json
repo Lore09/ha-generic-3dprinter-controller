@@ -1,0 +1,218 @@
+{
+ "source": "Saturn 4 Ultra 16K, firmware V1.5.6, idle, read-only capture of 2026-09-30",
+ "attributes_ack": {
+  "Id": "f25273b12b094c5a8b9513a30ca60049",
+  "Data": {
+   "Cmd": 1,
+   "Data": {
+    "Ack": 0
+   },
+   "RequestID": "57ac19a2d4f04747907107edb332a1c4",
+   "MainboardID": "78070ac4ce6d0100",
+   "TimeStamp": 1790780829
+  },
+  "Topic": "sdcp/response/78070ac4ce6d0100"
+ },
+ "attributes": {
+  "Attributes": {
+   "Name": "Saturn 4 Ultra 16K",
+   "MachineName": "Saturn 4 Ultra 16K",
+   "BrandName": "ELEGOO",
+   "ProtocolVersion": "V3.0.0",
+   "FirmwareVersion": "V1.5.6",
+   "Resolution": "15120x6230",
+   "XYZsize": "218.88x128.88x220",
+   "MainboardIP": "192.168.128.143",
+   "MainboardID": "78070ac4ce6d0100",
+   "SDCPStatus": 0,
+   "MaximumCloudSDCPSercicesAllowed": 0,
+   "NumberOfCloudSDCPServicesConnected": 0,
+   "NumberOfVideoStreamConnected": 0,
+   "MaximumVideoStreamAllowed": 2,
+   "NetworkStatus": "wlan",
+   "UsbDiskStatus": 1,
+   "Capabilities": [
+    "FILE_TRANSFER",
+    "PRINT_CONTROL",
+    "VIDEO_STREAM"
+   ],
+   "SupportFileType": [
+    "CTB",
+    "GOO"
+   ],
+   "DevicesStatus": {
+    "TempSensorStatusOfUVLED": 1,
+    "TankStatus": 1,
+    "LCDStatus": 1,
+    "SgStatus": 1,
+    "ZMotorStatus": 1,
+    "RotateMotorStatus": 1,
+    "RelaseFilmState": 1
+   },
+   "ReleaseFilmMax": 60000,
+   "CameraStatus": 1,
+   "RemainingMemory": 6761742336,
+   "TLPNoCapPos": 50,
+   "TLPStartCapPos": 30,
+   "TLPInterLayers": 10
+  },
+  "MainboardID": "78070ac4ce6d0100",
+  "TimeStamp": 1790780829,
+  "Topic": "sdcp/attributes/78070ac4ce6d0100"
+ },
+ "status_ack": {
+  "Id": "f25273b12b094c5a8b9513a30ca60049",
+  "Data": {
+   "Cmd": 0,
+   "Data": {
+    "Ack": 0
+   },
+   "RequestID": "6b8027d26bba427c96e6c2f6875bdb3f",
+   "MainboardID": "78070ac4ce6d0100",
+   "TimeStamp": 1790780831
+  },
+  "Topic": "sdcp/response/78070ac4ce6d0100"
+ },
+ "status": {
+  "Status": {
+   "CurrentStatus": [
+    0
+   ],
+   "ReleaseFilm": 283,
+   "TempOfUVLED": 29.077695846557617,
+   "TimeLapseStatus": 0,
+   "HeatStatus": 1,
+   "TempOfTank": 29,
+   "TempTargetTank": 30,
+   "PrintInfo": {
+    "Status": 0,
+    "CurrentLayer": 283,
+    "TotalLayer": 283,
+    "CurrentTicks": 2757032,
+    "TotalTicks": 2757032,
+    "ErrorNumber": 0,
+    "Filename": "SUP_allineatore_01_1_202609301434.goo",
+    "TaskId": ""
+   }
+  },
+  "MainboardID": "78070ac4ce6d0100",
+  "TimeStamp": 1790780831,
+  "Topic": "sdcp/status/78070ac4ce6d0100"
+ },
+ "file_list": {
+  "Id": "f25273b12b094c5a8b9513a30ca60049",
+  "Data": {
+   "Cmd": 258,
+   "Data": {
+    "Ack": 0,
+    "FileList": [
+     {
+      "name": "/local/SUP_allineatore_01_1_202609301434.goo",
+      "type": 1
+     }
+    ]
+   },
+   "RequestID": "7aeae50589b84347b8951a2a07e99851",
+   "MainboardID": "78070ac4ce6d0100",
+   "TimeStamp": 1790780832
+  },
+  "Topic": "sdcp/response/78070ac4ce6d0100"
+ },
+ "history": {
+  "Id": "f25273b12b094c5a8b9513a30ca60049",
+  "Data": {
+   "Cmd": 320,
+   "Data": {
+    "Ack": 0,
+    "HistoryData": [
+     "3caac4be-bccc-11f1-beb8-ccc837e4b1e0"
+    ]
+   },
+   "RequestID": "677bbc3071f845bdb4c04e7159a27c2b",
+   "MainboardID": "78070ac4ce6d0100",
+   "TimeStamp": 1790780834
+  },
+  "Topic": "sdcp/response/78070ac4ce6d0100"
+ },
+ "history_detail": {
+  "Id": "f25273b12b094c5a8b9513a30ca60049",
+  "Data": {
+   "Cmd": 321,
+   "Data": {
+    "Ack": 0,
+    "HistoryDetailList": [
+     {
+      "Thumbnail": "http://192.168.128.143:3030/media/mmcblk0p1/history_image/3caac4be-bccc-11f1-beb8-ccc837e4b1e0.bmp",
+      "TaskName": "/media/mmcblk0p3/SUP_allineatore_01_1_202609301434.goo",
+      "BeginTime": 1790772080,
+      "EndTime": 1790774837,
+      "TaskStatus": 1,
+      "SliceInformation": {
+       "resolution_x": 15120,
+       "resolution_y": 6230,
+       "layer_height": 0.05000000074505806,
+       "total_layer_numbers": 283,
+       "machine_size_x": 211.67999267578125,
+       "machine_size_y": 118.37000274658203,
+       "machine_size_z": 220,
+       "model_size_x": 0,
+       "model_size_y": 0,
+       "model_size_z": 0,
+       "volume": 3.669110059738159,
+       "weight": 4.218999862670898,
+       "price": 0,
+       "print_time": 1980,
+       "machine_name": "ELEGOO Saturn 4 Ultra 16K",
+       "independent_supports": 0,
+       "resin_color": 0,
+       "resin_type": "",
+       "resin_name": "",
+       "profile_name": "",
+       "resin_density": 0,
+       "bottom_layer_numbers": 5,
+       "transition_layer_numbers": 10,
+       "transition_type": 0,
+       "bottom_layer_lift_height": 0.05000000074505806,
+       "bottom_layer_lift_height2": 0,
+       "bottom_layer_drop_height2": 0,
+       "bottom_layer_lift_speed": 0.000833333353511989,
+       "bottom_layer_lift_speed2": 0,
+       "bottom_layer_drop_speed": 0.000833333353511989,
+       "bottom_layer_drop_speed2": 0,
+       "bottom_layer_exposure_time": 32000,
+       "bottom_layer_pwm": 255,
+       "bottom_layer_light_off_time": 0,
+       "bottom_layer_rest_time_after_drop": 1200,
+       "bottom_layer_rest_time_after_lift": 0,
+       "bottom_layer_rest_time_before_lift": 0,
+       "normal_layer_lift_height": 0.05000000074505806,
+       "normal_layer_lift_height2": 0,
+       "normal_layer_drop_height2": 0,
+       "normal_layer_lift_speed": 0.000833333353511989,
+       "normal_layer_lift_speed2": 0,
+       "normal_layer_drop_speed": 0.000833333353511989,
+       "normal_layer_drop_speed2": 0,
+       "normal_layer_exposure_time": 2300,
+       "normal_layer_pwm": 255,
+       "normal_layer_light_off_time": 0,
+       "normal_layer_rest_time_after_drop": 1200,
+       "normal_layer_rest_time_after_lift": 0,
+       "normal_layer_rest_time_before_lift": 0
+      },
+      "AlreadyPrintLayer": 283,
+      "TaskId": "3caac4be-bccc-11f1-beb8-ccc837e4b1e0",
+      "MD5": "7ba6252be64f7c011f21d06c5d9133ea",
+      "CurrentLayerTalVolume": 0,
+      "TimeLapseVideoStatus": 0,
+      "TimeLapseVideoUrl": "",
+      "ErrorStatusReason": 0
+     }
+    ]
+   },
+   "RequestID": "0cd8994fc1494529a98ba3d3ffb740d8",
+   "MainboardID": "78070ac4ce6d0100",
+   "TimeStamp": 1790785003
+  },
+  "Topic": "sdcp/response/78070ac4ce6d0100"
+ }
+}

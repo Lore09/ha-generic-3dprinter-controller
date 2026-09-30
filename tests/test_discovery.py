@@ -147,3 +147,40 @@ async def test_an_entry_without_a_port_is_the_one_on_the_default_port(hass: Home
     same = await _add_moonraker(hass, "192.0.2.21", 7125)
     assert (same["type"], same["reason"]) == (FlowResultType.ABORT, "already_configured")
     assert (await _add_moonraker(hass, "192.0.2.21", 7126))["type"] is FlowResultType.CREATE_ENTRY
+
+
+def _replies(*replies: tuple[dict[str, Any], str]) -> Any:
+    """Stand in for the UDP probe: every printer on the LAN answers, and ``accept`` filters."""
+
+    async def probe(probe: bytes, target: tuple[str, int], timeout: float, accept: Any = None):
+        for reply, sender in replies:
+            if accept is None or accept(reply):
+                return reply, sender
+        return None
+
+    return probe
+
+
+async def test_a_nested_sdcp_reply_is_found_at_its_sender() -> None:
+    from custom_components.generic_3dprinter.adapters import sdcp
+
+    attributes = {"MachineName": "Centauri Carbon", "MainboardID": "5c44"}
+    nested = {"Id": "x", "Data": {"Attributes": attributes}}
+    with patch.object(sdcp, "async_probe_udp", _replies((nested, "192.0.2.30"))):
+        found = await sdcp.async_discover_sdcp(timeout=0.1)
+    assert found is not None
+    assert (found.host, found.mainboard_id, found.model) == ("192.0.2.30", "5c44", "Centauri Carbon")
+
+
+async def test_a_resin_printer_is_not_offered_as_a_centauri() -> None:
+    from custom_components.generic_3dprinter.adapters import sdcp
+    from tests.fake_resin_printer import load_fixture
+
+    saturn = {"Id": "x", "Data": {"Attributes": load_fixture()["attributes"]["Attributes"]}}
+    centauri = {"Id": "y", "Data": {"MachineName": "Centauri Carbon", "MainboardIP": "192.0.2.32"}}
+    with patch.object(sdcp, "async_probe_udp", _replies((saturn, "192.0.2.31"))):
+        assert await sdcp.async_discover_sdcp(timeout=0.1) is None
+    both = _replies((saturn, "192.0.2.31"), (centauri, "192.0.2.32"))
+    with patch.object(sdcp, "async_probe_udp", both):
+        found = await sdcp.async_discover_sdcp(timeout=0.1)
+    assert found is not None and found.host == "192.0.2.32"
