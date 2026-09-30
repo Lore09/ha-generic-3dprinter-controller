@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import time
 from contextlib import suppress
@@ -97,6 +98,11 @@ class FakeResinPrinter:
         #: RTSP sessions open, as the attributes count them, and every 386 ``Enable`` sent.
         self.video_streams = 0
         self.video_enables: list[Any] = []
+        #: Every upload chunk's form fields, with ``File`` as bytes and its ``filename``.
+        self.uploads: list[dict[str, Any]] = []
+        #: The ``code`` an upload chunk is answered with; ``None`` answers with a bare page.
+        self.upload_code: str | None = "000000"
+        self._transfers: dict[str, bytearray] = {}
 
         self.url = ""
         self._sockets: set = set()
@@ -120,6 +126,7 @@ class FakeResinPrinter:
 
         app = web.Application()
         app.router.add_get("/websocket", self._handle)
+        app.router.add_post("/uploadFile/upload", self._upload)
         self._runner, site = await _bind(app, self.port if self.url else None)
         if not self.url:
             self.url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"  # noqa: SLF001
@@ -243,6 +250,32 @@ class FakeResinPrinter:
                 gone = set(data["FileList"])
                 self.files = [item for item in self.files if item["name"] not in gone]
             await ws.send_str(self._response(cmd, request_id, {"Ack": ack}))
+
+    async def _upload(self, request):
+        """Take one chunk of the spec's form (en.md:1017-1021); the last one stores the file
+        in ``/local`` when its MD5 matches."""
+        from aiohttp import web
+
+        fields: dict[str, Any] = {}
+        reader = await request.multipart()
+        while (part := await reader.next()) is not None:
+            if part.name == "File":
+                fields["File"] = bytes(await part.read())
+                fields["filename"] = part.filename
+            else:
+                fields[part.name] = await part.text()
+        self.uploads.append(fields)
+        if self.upload_code is None:
+            return web.Response(text="<html>not found</html>", content_type="text/html")
+        if self.upload_code != "000000":
+            return web.json_response({"code": self.upload_code, "messages": ["refused"], "success": False})
+        body = self._transfers.setdefault(fields["Uuid"], bytearray())
+        body.extend(fields["File"])
+        if len(body) >= int(fields["TotalSize"]):
+            del self._transfers[fields["Uuid"]]
+            if hashlib.md5(body).hexdigest() == fields["S-File-MD5"]:  # noqa: S324
+                self.files.append({"name": f"/local/{fields['filename']}", "type": 1})
+        return web.json_response({"code": "000000", "messages": None, "data": None, "success": True})
 
     def _envelope_ok(self, frame: dict[str, Any], inner: dict[str, Any]) -> bool:
         """Return whether a request carries the envelope the capture used."""

@@ -1023,6 +1023,27 @@ test("a file is uploaded through the authenticated endpoint", async () => {
   assert.equal(uploads[0].init.body.get("file").name, "part.gcode");
 });
 
+test("the file picker offers the types the printer stores", async () => {
+  const resin = idleCc2({ upload_suffixes: [".ctb", ".goo"] });
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: resin },
+    files: FILES,
+  });
+  await openTab(card, "files");
+  assert.equal(card.shadowRoot.querySelector(".upload-input").accept, ".ctb,.goo");
+});
+
+test("a printer that names no types keeps the G-code picker", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "CC2" }],
+    descriptions: { entry1: idleCc2() },
+    files: FILES,
+  });
+  await openTab(card, "files");
+  assert.equal(card.shadowRoot.querySelector(".upload-input").accept, ".gcode,.gco,.g,.bgcode");
+});
+
 // ---------------------------------------------------------------- long text
 
 const LONG_NAME = "ECC_0.4_Crimson Wing Dragon_1789719946_generate_eSUN PLA+ _0.2_10h4m.gcode";

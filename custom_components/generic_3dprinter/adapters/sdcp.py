@@ -443,6 +443,8 @@ class SdcpSession(Protocol):
     ack_messages: Mapping[int, str] = ACK_MESSAGES
     #: Codes one command means otherwise, by the command's name; the rest read ``ack_messages``.
     command_ack_messages: Mapping[str, Mapping[int, str]] = MappingProxyType({})
+    #: Count an upload chunk only when the printer answers it with code ``000000``.
+    upload_reply_required: bool = False
 
     def __init__(
         self,
@@ -900,13 +902,16 @@ class SdcpSession(Protocol):
                     url, data=form, timeout=aiohttp.ClientTimeout(total=180)
                 ) as response:
                     result = await _response_json(response)
+                    http_status = response.status
             except aiohttp.ClientError as err:
                 raise UnreachableError(f"the upload failed: {err}") from err
 
-            if result is not None and str(result.get("code")) not in ("000000", "None"):
+            reply = result or {}
+            code = str(reply.get("code"))
+            if code not in ("000000", "None") or (self.upload_reply_required and code != "000000"):
                 raise CommandRejectedError(
-                    f"the printer refused the upload: {result.get('messages')}",
-                    code=result.get("code"),
+                    f"the printer refused the upload: {reply.get('messages') or f'HTTP {http_status}'}",
+                    code=reply.get("code") or http_status,
                 )
 
             offset += UPLOAD_CHUNK

@@ -40,8 +40,8 @@ SATURN = ATTRIBUTES["MainboardID"]
 CONTROLS = frozenset({Command.PAUSE, Command.RESUME, Command.STOP, Command.DELETE_FILE})
 #: What a Saturn 4 Ultra 16K is granted, and what every resin model has.
 BASE = frozenset(
-    {Capability.FILE_LIST, Capability.RESIN_STATUS, Capability.PAUSE, Capability.RESUME,
-     Capability.STOP, Capability.FILE_DELETE}
+    {Capability.FILE_LIST, Capability.FILE_UPLOAD, Capability.RESIN_STATUS, Capability.PAUSE,
+     Capability.RESUME, Capability.STOP, Capability.FILE_DELETE}
 )
 
 
@@ -213,7 +213,7 @@ async def test_every_command_but_the_controls_is_refused_before_the_wire(
         with pytest.raises(UnsupportedCommandError):
             await adapter.async_send(command, **SAMPLE_PARAMS[command])
     with pytest.raises(ProtocolError):
-        await adapter.async_upload_file("part.goo", _chunks(b"x"))
+        await adapter.async_upload_file("part.gcode", _chunks(b"x"))
     assert resin_printer.sent_commands == before
     assert set(before) == {0, 1}
     assert resin_printer.forbidden == []

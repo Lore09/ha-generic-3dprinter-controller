@@ -45,6 +45,7 @@ from .const import (
     Capability,
 )
 from .coordinator import PrinterError
+from .protocols import UPLOAD_SUFFIXES
 from .proxy import WebProxyError, scrub_response_headers
 from .runtime import get_runtime
 from .security import InvalidToken, MediaToken
@@ -271,11 +272,8 @@ class WebProxyView(ProxyView):
 #: as a sanity bound. A sliced model is rarely a tenth of this.
 MAX_UPLOAD_BYTES: Final = 256 * 1024 * 1024
 
-#: File types a printer stores as a job. Anything else is refused at the door.
-UPLOAD_SUFFIXES: Final = (".gcode", ".gco", ".g", ".bgcode")
 
-
-def upload_name(raw: str | None) -> str:
+def upload_name(raw: str | None, suffixes: tuple[str, ...] = UPLOAD_SUFFIXES) -> str:
     """Return a safe file name for an upload, or raise ``HTTPBadRequest``.
 
     The name travels to the printer as a header or a form field, so only its last
@@ -286,9 +284,9 @@ def upload_name(raw: str | None) -> str:
     name = unquote(raw or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
     if not name or name in (".", "..") or any(ord(char) < 32 for char in name):
         raise web.HTTPBadRequest(text="the file needs a name")
-    if not name.lower().endswith(UPLOAD_SUFFIXES):
+    if not name.lower().endswith(suffixes):
         raise web.HTTPBadRequest(
-            text=f"only {', '.join(UPLOAD_SUFFIXES)} files can be sent to a printer"
+            text=f"only {', '.join(suffixes)} files can be sent to this printer"
         )
     if len(name) > 200:
         raise web.HTTPBadRequest(text="the file name is too long")
@@ -296,7 +294,7 @@ def upload_name(raw: str | None) -> str:
 
 
 class UploadView(HomeAssistantView):
-    """Receive a G-code file from the card and store it on the printer.
+    """Receive a print file from the card and store it on the printer.
 
     Unlike the proxy views this one is called with ``fetch``, which carries the
     user's own credentials, so Home Assistant authenticates it as it does any API
@@ -333,7 +331,7 @@ class UploadView(HomeAssistantView):
         if part is None or not hasattr(part, "read_chunk"):
             raise web.HTTPBadRequest(text="the upload has no file field")
 
-        name = upload_name(part.filename)
+        name = upload_name(part.filename, runtime.upload_suffixes)
         body = bytearray()
         while chunk := await part.read_chunk(STREAM_CHUNK):
             body.extend(chunk)

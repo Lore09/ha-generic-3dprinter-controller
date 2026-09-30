@@ -35,6 +35,9 @@ const CAMERA_RESIGN_MS = 60 * 60 * 1000;
 /* After a camera that failed outright, how long to wait before trying again. */
 const CAMERA_RETRY_MS = 30 * 1000;
 
+/* The file types an FDM printer stores, for a description that names none. */
+const DEFAULT_UPLOAD_SUFFIXES = [".gcode", ".gco", ".g", ".bgcode"];
+
 const DEFAULT_JOG_STEPS = [0.1, 1, 10, 50];
 const DEFAULT_PRESETS = [
   { name: "PLA", hotend: 210, bed: 60 },
@@ -226,6 +229,12 @@ const formatBytes = (value) => {
 const formatStep = (step) => (step < 1 ? String(step) : String(Math.round(step)));
 
 const baseName = (path) => String(path || "").split("/").pop();
+
+/** Return the file picker's `accept`: the suffixes the printer stores, such as ".ctb,.goo". */
+const uploadAccept = (description) => {
+  const suffixes = (description && description.upload_suffixes) || [];
+  return (suffixes.length ? suffixes : DEFAULT_UPLOAD_SUFFIXES).join(",");
+};
 
 /** Return true when an input is being edited, so a reading does not overwrite it. */
 const editing = (input) =>
@@ -1323,7 +1332,7 @@ class PrinterView {
     this.refreshFiles.addEventListener("click", () => this.loadFiles());
     this.uploadInput = el("input", "upload-input");
     this.uploadInput.type = "file";
-    this.uploadInput.accept = ".gcode,.gco,.g,.bgcode";
+    this.uploadInput.accept = uploadAccept(this.description);
     this.uploadInput.hidden = true;
     this.uploadInput.addEventListener("change", () => {
       const file = this.uploadInput.files && this.uploadInput.files[0];
@@ -1934,6 +1943,7 @@ class PrinterView {
     const listed = caps.includes("file_list");
     if (this.tabButtons) this.tabButtons.files.hidden = !listed && !caps.includes("file_upload");
     this.uploadButton.hidden = !caps.includes("file_upload");
+    this.uploadInput.accept = uploadAccept(this.description);
     this.uploadButton.disabled = !online || Boolean(this.uploading);
     this.printAfterUpload.hidden = !caps.includes("file_upload") || !caps.includes("start_print");
     this.refreshFiles.hidden = !listed;

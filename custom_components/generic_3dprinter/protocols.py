@@ -51,6 +51,9 @@ def valid_serial(serial: str) -> bool:
     return _SERIAL.fullmatch(serial) is not None
 
 
+#: The suffixes an FDM printer stores as a job; an adapter whose printer takes others says so.
+UPLOAD_SUFFIXES: Final = (".gcode", ".gco", ".g", ".bgcode")
+
 COMMAND_CAPABILITY: Final[Mapping[Command, Capability]] = MappingProxyType(
     {
         Command.START_PRINT: Capability.START_PRINT,
@@ -414,6 +417,11 @@ class Protocol(ABC):
     def session(self) -> aiohttp.ClientSession:
         """Return the session shared by every adapter of this entry."""
         return self._session
+
+    @property
+    def upload_suffixes(self) -> tuple[str, ...]:
+        """Return the file suffixes, in lower case, this printer stores as a job."""
+        return UPLOAD_SUFFIXES
 
     @property
     def capabilities(self) -> frozenset[Capability]:

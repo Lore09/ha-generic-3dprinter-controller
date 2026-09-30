@@ -142,6 +142,7 @@ async def test_the_whole_lifecycle(
     assert "?" not in description["camera_url"]
     assert "start_print" not in description["printer"]["capabilities"]
     assert [item["id"] for item in description["unsafe_features"]] == ["sdcp_start_print"]
+    assert description["upload_suffixes"] == [".gcode", ".gco", ".g", ".bgcode"]
 
     # Unloading releases the runtime, the coordinator and the entities' live state.
     # Home Assistant leaves the registry entries in place and may restore a last

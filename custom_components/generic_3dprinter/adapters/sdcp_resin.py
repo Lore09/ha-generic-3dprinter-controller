@@ -1,5 +1,5 @@
 """Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K. It shares the socket with
-the Centauri Carbon adapter, and sends only the reads, pause, resume, stop and delete."""
+the Centauri Carbon adapter, and sends only the reads, pause, resume, stop, delete and uploads."""
 
 from __future__ import annotations
 
@@ -29,9 +29,11 @@ from ..protocols import (
 )
 from . import sdcp
 from .sdcp import (
+    RESIN_FILE_TYPES,
     SDCP_DISCOVERY_PORT,
     SDCP_DISCOVERY_PROBE,
     SESSION_COMMAND,
+    UPLOAD_PATH,
     SdcpSession,
     _celsius,
     _integer,
@@ -125,6 +127,9 @@ RESIN_ACK_MESSAGES: Final[Mapping[str, Mapping[int, str]]] = MappingProxyType(
 
 #: Where a file named without a folder is kept, as the file list names it.
 LOCAL_FOLDER: Final = "/local"
+
+#: The job types a Saturn 4 Ultra 16K names in ``SupportFileType``, until the attributes say.
+RESIN_SUFFIXES: Final = (".ctb", ".goo")
 
 #: ``PrintInfo.ErrorNumber`` (spec en.md:206-218).
 PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
@@ -297,10 +302,13 @@ def _discovery_result(reply: Mapping[str, Any], sender: str) -> DiscoveryResult:
 
 
 class SdcpResinProtocol(SdcpSession):
-    """An Elegoo resin printer on SDCP V3: it reads, pauses, resumes, stops and deletes files."""
+    """An Elegoo resin printer on SDCP V3: it reads, pauses, resumes and stops, and uploads
+    and deletes files."""
 
     commands = RESIN_COMMAND
     command_ack_messages = RESIN_ACK_MESSAGES
+    #: Only the spec's reply counts, so a page on the port is never read as a stored file.
+    upload_reply_required = True
     #: A job starts only on an idle machine, whatever the print state says; then the defaults.
     block_rules = (
         BlockRule(frozenset({Command.START_PRINT}), when=machine_busy, reason="the printer is not idle"),
@@ -379,6 +387,23 @@ class SdcpResinProtocol(SdcpSession):
         )
 
     # ------------------------------------------------------------------- hooks
+
+    @property
+    def upload_url(self) -> str:
+        """Return where files are posted: the socket's own port (spec en.md:1017-1021)."""
+        return f"{self.config.scheme}://{self.config.host}:{self.ws_port}{UPLOAD_PATH}"
+
+    @property
+    def upload_suffixes(self) -> tuple[str, ...]:
+        """Return the resin job types the printer names in ``SupportFileType``, as suffixes;
+        a type no resin printer is known to print, such as G-code, is never one."""
+        named = self._attributes.get("SupportFileType")
+        named = [named] if isinstance(named, str) else named
+        if not isinstance(named, list):
+            return RESIN_SUFFIXES
+        types = (str(item).strip().lower() for item in named)
+        suffixes = tuple(dict.fromkeys(f".{item}" for item in types if item in RESIN_FILE_TYPES))
+        return suffixes or RESIN_SUFFIXES
 
     @property
     def _address(self) -> str:
@@ -501,5 +526,16 @@ class SdcpResinProtocol(SdcpSession):
     async def async_upload_file(
         self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None
     ) -> FileEntry:
-        """Refuse an upload, which this adapter does not make yet."""
-        raise ProtocolError("the resin adapter does not upload files yet")
+        """Post one file in chunks, as the Centauri does, once it is a type the printer prints
+        and the machine is idle; a busy one may be printing or taking another file."""
+        suffixes = self.upload_suffixes
+        if not name.lower().endswith(suffixes):
+            raise CommandRejectedError(
+                f"the printer prints only {', '.join(suffixes)} files, not {name.rsplit('/', 1)[-1]}",
+                reason="the printer does not print this type of file",
+            )
+        if machine_busy(await self.async_read()):
+            raise CommandRejectedError(
+                "the printer takes a file only while it is idle", reason="the printer is not idle"
+            )
+        return await super().async_upload_file(name, stream, size=size)

@@ -217,3 +217,38 @@ async def test_the_pause_button_sends_129_with_an_empty_data(
     assert acts == [(129, {})]
     assert resin_printer.forbidden == []
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_the_card_uploads_a_goo_file_to_the_socket_port(
+    hass: HomeAssistant, hass_client: Any, hass_ws_client: Any, resin_printer: FakeResinPrinter
+) -> None:
+    import aiohttp
+
+    entry = _entry(hass, resin_printer.port, SATURN)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    websocket = await hass_ws_client(hass)
+    await websocket.send_json({"id": 1, "type": "generic_3dprinter/describe", "entry_id": entry.entry_id})
+    described = (await websocket.receive_json())["result"]
+    assert described["upload_suffixes"] == [".ctb", ".goo"]
+    assert "file_upload" in described["printer"]["capabilities"]
+
+    client = await hass_client()
+    url = f"/api/generic_3dprinter/{entry.entry_id}/upload"
+    form = aiohttp.FormData()
+    form.add_field("file", b"GOO layers", filename="part.goo")
+    response = await client.post(url, data=form)
+    assert response.status == 200, await response.text()
+    assert (await response.json())["file"]["path"] == "/local/part.goo"
+    assert resin_printer.uploads[-1]["File"] == b"GOO layers"
+    assert {"name": "/local/part.goo", "type": 1} in resin_printer.files
+
+    form = aiohttp.FormData()
+    form.add_field("file", b"G28\n", filename="part.gcode")
+    response = await client.post(url, data=form)
+    assert response.status == 400
+    assert ".ctb, .goo" in await response.text()
+    assert len(resin_printer.uploads) == 1
+    assert set(resin_printer.sent_commands) <= {0, 1, 258}
+    assert resin_printer.forbidden == []
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -316,6 +316,11 @@ class PrinterRuntime:
         """Return ``True`` when this printer serves a web page worth proxying."""
         return Capability.WEB_UI in self.adapter.capabilities
 
+    @property
+    def upload_suffixes(self) -> tuple[str, ...]:
+        """Return the file suffixes this printer stores as a job, such as ``.gcode``."""
+        return self.adapter.upload_suffixes
+
     def model_profile(self) -> dict[str, object] | None:
         """Return which model profile applies, and whether it was measured."""
         profile = self.adapter.model_profile
@@ -370,6 +375,7 @@ class PrinterRuntime:
             "status_url": tokens.async_url(entry_id=entry_id, scope="status"),
             "web_proxy_url": web_proxy_url,
             "web_ui_url": self.config.web_url,
+            "upload_suffixes": list(self.upload_suffixes),
             "camera_stats": self.camera.stats().as_dict(),
             "unsafe_features": [
                 {"id": feature.id, "label": feature.label, "reason": feature.reason}
