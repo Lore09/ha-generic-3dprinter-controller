@@ -1,3 +1,5 @@
+<img src="custom_components/generic_3dprinter/brand/icon.png" alt="" width="96" align="right">
+
 # Generic 3D Printer Controller
 
 One Home Assistant integration for a **mixed 3D printer fleet**. Each printer is a
