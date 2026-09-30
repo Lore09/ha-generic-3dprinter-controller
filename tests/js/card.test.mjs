@@ -452,6 +452,225 @@ test("printer errors are listed under the header", async () => {
   assert.deepEqual(texts(card, ".error-line"), ["printer exception 109: filament has run out"]);
 });
 
+// -------------------------------------------------------------------- resin
+
+/** The Saturn 4 Ultra 16K as captured idle on firmware V1.5.6, without either opt-in. */
+function saturn({ printer = {}, resin = {}, ...overrides } = {}) {
+  const idle = snapshot({
+    protocol: "sdcp_resin",
+    print_state: "idle",
+    capabilities: [
+      "file_delete",
+      "file_list",
+      "file_upload",
+      "pause",
+      "resin_status",
+      "resume",
+      "stop",
+      "vat_sensor",
+    ],
+    progress: null,
+    current_layer: null,
+    total_layers: null,
+    remaining: null,
+    elapsed: null,
+    filename: "SUP_allineatore_01_1_202609301434.goo",
+    job_id: null,
+    speed_factor: null,
+    hotend: { current: null, target: null },
+    bed: { current: null, target: null },
+    chamber: { current: null, target: null },
+    fans: { model: null, auxiliary: null, chamber: null, hotend: null, controller: null },
+    position: null,
+    lights: [],
+    camera: false,
+    model: "Saturn 4 Ultra 16K",
+    firmware: "V1.5.6",
+    serial: "78070ac4ce6d0100",
+    resin: {
+      machine: "idle",
+      phase: "idle",
+      phase_code: 0,
+      uv_led: 29.077695846557617,
+      vat: { current: 29.0, target: 30.0 },
+      vat_heat_status: 1,
+      release_film: 283,
+      release_film_max: 60000,
+      release_film_used: 0.5,
+      printer_timelapse: false,
+      device_faults: [],
+      video_streams: 0,
+      video_streams_max: 2,
+      ...resin,
+    },
+    ...printer,
+  });
+  return description({
+    name: "Saturn",
+    protocol: "sdcp_resin",
+    model: "Saturn 4 Ultra 16K",
+    firmware: "V1.5.6",
+    camera: false,
+    web_ui: false,
+    camera_url: null,
+    snapshot_url: null,
+    web_proxy_url: null,
+    web_ui_url: null,
+    upload_suffixes: [".ctb", ".goo"],
+    printer: idle,
+    ...overrides,
+  });
+}
+
+/** The same printer mid-exposure, with elegoo-homeassistant issue #21's layers, ticks and film. */
+function printingSaturn() {
+  return saturn({
+    printer: {
+      print_state: "printing",
+      progress: 77.84489477786438,
+      current_layer: 3995,
+      total_layers: 5132,
+      elapsed: 20313.461,
+      remaining: 5048.004,
+      filename: "model.goo",
+      job_id: "52706856",
+    },
+    resin: {
+      machine: "printing",
+      phase: "exposing",
+      phase_code: 3,
+      vat: { current: 20.0, target: 30.0 },
+      vat_heat_status: 0,
+      release_film: 10854,
+      release_film_used: 18.1,
+    },
+  });
+}
+
+const RESIN_FILES = [{ name: "/local/part.goo", path: "/local/part.goo", size: 4096, modified: null }];
+
+test("a resin printer shows its vat, UV LED and film, and no FDM section", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: saturn() },
+  });
+  assert.deepEqual(texts(card, ".state"), ["Idle"]);
+  assert.deepEqual(texts(card, ".panel-status .temp-label"), ["Vat", "UV LED"]);
+  assert.deepEqual(texts(card, ".panel-status .temp-value"), ["29 °C → 30 °C", "29 °C"]);
+  // The vat's target is the printer's own, so the cell is not marked as heating.
+  assert.deepEqual(all(card, ".temp.heating"), []);
+  assert.deepEqual(texts(card, '.resin-reading[data-reading="film"]'), ["Release film 283 / 60000 (0.5%)"]);
+  assert.deepEqual(all(card, ".fault-chip"), []);
+  assert.deepEqual(all(card, ".fan-reading"), []);
+  assert.deepEqual(all(card, ".filament-toggle"), []);
+  assert.deepEqual(all(card, ".filament-strip"), []);
+  assert.deepEqual(all(card, ".light-toggle, [data-command='set_light']"), []);
+
+  await openTab(card, "controls");
+  assert.deepEqual(all(card, ".heaters"), []);
+  assert.deepEqual(all(card, ".heater"), []);
+  assert.deepEqual(all(card, ".chip.preset"), []);
+  assert.deepEqual(all(card, ".chip.cooldown"), []);
+  assert.deepEqual(all(card, ".fans"), []);
+  assert.deepEqual(all(card, ".slider-row"), []);
+  assert.deepEqual(all(card, ".motion"), []);
+  assert.deepEqual(command(card, "jog"), []);
+  assert.deepEqual(command(card, "home"), []);
+  assert.deepEqual(texts(card, ".empty-panel"), ["This printer reports no settings it can be given."]);
+});
+
+test("an idle resin printer keeps its last file and shows no times, layers or progress", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: saturn() },
+  });
+  assert.deepEqual(texts(card, ".job-name"), ["SUP_allineatore_01_1_202609301434.goo"]);
+  assert.deepEqual(all(card, ".stat"), []);
+  assert.deepEqual(all(card, ".progress-fill"), []);
+});
+
+test("a printing resin printer shows its phase, layers, progress and time left", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: printingSaturn() },
+  });
+  assert.deepEqual(texts(card, ".state"), ["Printing · Exposing"]);
+  const stat = (key) => card.shadowRoot.querySelector(`.stat[data-stat="${key}"] .stat-value`).textContent;
+  assert.equal(stat("layer"), "3995 / 5132");
+  assert.equal(stat("remaining"), "1h 24m");
+  assert.equal(stat("elapsed"), "5h 38m");
+  assert.equal(card.shadowRoot.querySelector(".progress-fill").style.width, "77.84489477786438%");
+  assert.deepEqual(texts(card, ".progress-label"), ["78%"]);
+  assert.deepEqual(texts(card, ".panel-status .temp-value"), ["20 °C → 30 °C", "29 °C"]);
+  assert.deepEqual(texts(card, '.resin-reading[data-reading="film"]'), ["Release film 10854 / 60000 (18.1%)"]);
+  assert.equal(command(card, "pause").length, 1);
+  assert.equal(command(card, "pause")[0].disabled, false);
+});
+
+test("a resin printer's phase is only added where it says more than the state", async () => {
+  for (const [state, phase, label] of [
+    ["preparing", "preheating", "Preparing · Preheating"],
+    ["paused", "paused", "Paused"],
+    ["finished", "completed", "Finished"],
+    ["idle", "file_transferring", "Idle · Receiving a file"],
+    ["printing", "other", "Printing"],
+  ]) {
+    const { card } = await mountCard({
+      printers: [{ entry_id: "entry1", name: "Saturn" }],
+      descriptions: { entry1: saturn({ printer: { print_state: state }, resin: { phase } }) },
+    });
+    assert.deepEqual(texts(card, ".state"), [label], `${state} / ${phase}`);
+  }
+});
+
+test("the camera overlay of a resin printer carries its phase", async () => {
+  const printing = printingSaturn();
+  printing.printer.capabilities = [...printing.printer.capabilities, "camera"];
+  printing.camera = true;
+  printing.camera_url = "/api/generic_3dprinter/entry1/camera.mjpeg/tok";
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: printing },
+  });
+  assert.deepEqual(texts(card, ".overlay-chip"), ["Printing · Exposing", "78%"]);
+});
+
+test("a resin printer's failing device checks are shown as chips", async () => {
+  const { card } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: {
+      entry1: saturn({
+        printer: {
+          errors: ["the printer's LCDStatus check is failing", "the printer's SgStatus check is failing"],
+        },
+        resin: { device_faults: ["LCDStatus", "SgStatus"] },
+      }),
+    },
+  });
+  assert.deepEqual(texts(card, ".fault-chip"), ["LCD fault", "SgStatus fault"]);
+  assert.equal(texts(card, ".error-line").length, 2);
+});
+
+test("starting a resin file asks about the vat and platform, not the bed", async () => {
+  const resin = saturn();
+  resin.printer.capabilities = [...resin.printer.capabilities, "start_print"];
+  const { card, calls, confirmations } = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Saturn" }],
+    descriptions: { entry1: resin },
+    files: RESIN_FILES,
+  });
+  await openTab(card, "files");
+  await tick();
+  const row = [...card.shadowRoot.querySelectorAll(".file")].find((node) => node.dataset.file === "/local/part.goo");
+  row.querySelector('[data-command="start_print"]').click();
+  await tick();
+  assert.match(confirmations[0], /part\.goo\? Make sure the vat holds resin/);
+  assert.doesNotMatch(confirmations[0], /bed/);
+  assert.deepEqual(sent(calls).map((call) => [call.command, call.data]), [
+    ["start_print", { filename: "/local/part.goo" }],
+  ]);
+});
+
 // ------------------------------------------------------------------- camera
 
 test("the camera pane loads the live stream, not a still snapshot", async () => {

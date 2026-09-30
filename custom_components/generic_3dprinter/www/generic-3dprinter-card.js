@@ -96,6 +96,40 @@ const STATE_LABELS = {
   off: "Off",
 };
 
+/* What a resin printer's job is doing, after its state; a phase the state already says is left out. */
+const PHASE_LABELS = {
+  starting: "Starting",
+  homing: "Homing",
+  file_checking: "Checking the file",
+  preheating: "Preheating",
+  descending: "Descending",
+  exposing: "Exposing",
+  lifting: "Lifting",
+  pausing: "Pausing",
+  stopping: "Stopping",
+  file_transferring: "Receiving a file",
+  file_received: "File received",
+  exposure_test: "Exposure test",
+  self_check: "Self-check",
+};
+
+/* A resin printer's device checks by the name it sends; any other is shown as sent. */
+const FAULT_LABELS = {
+  TempSensorStatusOfUVLED: "UV LED sensor",
+  TankStatus: "Vat",
+  LCDStatus: "LCD",
+  ZMotorStatus: "Z motor",
+  RotateMotorStatus: "Rotate motor",
+  RelaseFilmState: "Release film",
+};
+
+/** The state's label, with a resin printer's phase after it when it adds something. */
+const stateText = (state, snapshot) => {
+  const label = STATE_LABELS[state] || state;
+  const phase = state === "off" ? null : PHASE_LABELS[(snapshot.resin || {}).phase];
+  return phase ? `${label} · ${phase}` : label;
+};
+
 /* A job is running or held: the head must not be moved and a new print not started. */
 const ACTIVE_STATES = new Set(["printing", "paused", "preparing"]);
 
@@ -1096,6 +1130,7 @@ class PrinterView {
     this.filamentStrip.type = "button";
     this.filamentStrip.addEventListener("click", () => this.filament.open());
     this.fansReadout = el("div", "fans-readout");
+    this.resinReadout = el("div", "resin-readout");
 
     this.jobControls = el("div", "controls");
     this.pauseButton = button("ctl primary", "Pause", "pause", "pause");
@@ -1116,6 +1151,7 @@ class PrinterView {
       this.tempsEl,
       this.filamentStrip,
       this.fansReadout,
+      this.resinReadout,
       this.jobControls,
     );
     return panel;
@@ -1437,7 +1473,10 @@ class PrinterView {
   }
 
   printFile(file) {
-    if (!this.card.confirm(`Start printing ${baseName(file.name)}? Make sure the bed is clear.`)) return;
+    const check = this.capabilities.includes("resin_status")
+      ? "Make sure the vat holds resin and the vat and platform are clean."
+      : "Make sure the bed is clear.";
+    if (!this.card.confirm(`Start printing ${baseName(file.name)}? ${check}`)) return;
     this.card.send(this.entryId, "start_print", { filename: file.path || file.name });
   }
 
@@ -1483,7 +1522,7 @@ class PrinterView {
       .join(" · ");
     this.subtitleEl.textContent = subtitle;
     this.subtitleEl.hidden = !subtitle;
-    this.stateEl.textContent = STATE_LABELS[state] || state;
+    this.stateEl.textContent = stateText(state, snapshot);
     this.stateEl.style.color = color;
 
     const lightOn = (snapshot.lights || []).includes("chamber");
@@ -1660,7 +1699,7 @@ class PrinterView {
     this.cameraOverlay.replaceChildren();
     const state = snapshot.print_state || "unknown";
     if (ACTIVE_STATES.has(state) || state === "finished") {
-      const chip = el("span", "overlay-chip", STATE_LABELS[state] || state);
+      const chip = el("span", "overlay-chip", stateText(state, snapshot));
       chip.style.background = STATE_COLORS[state];
       this.cameraOverlay.appendChild(chip);
       const percent = asNumber(snapshot.progress);
@@ -1739,10 +1778,14 @@ class PrinterView {
     this.tempsEl.replaceChildren();
     if (!this.poweredOff) {
       const chamberVisible = caps.includes("set_chamber_temp") || caps.includes("chamber_sensor");
-      for (const [label, temps, visible] of [
-        ["Nozzle", snapshot.hotend, true],
-        ["Bed", snapshot.bed, true],
-        ["Chamber", snapshot.chamber, chamberVisible],
+      const resin = snapshot.resin || {};
+      // The vat's target is the printer's own and is never set from here, so it is not shown as heating.
+      for (const [label, temps, visible, heats] of [
+        ["Nozzle", snapshot.hotend, true, true],
+        ["Bed", snapshot.bed, true, true],
+        ["Chamber", snapshot.chamber, chamberVisible, true],
+        ["Vat", resin.vat, caps.includes("vat_sensor"), false],
+        ["UV LED", { current: resin.uv_led }, caps.includes("resin_status"), false],
       ]) {
         if (!visible || !temps) continue;
         if (asNumber(temps.current) === null && asNumber(temps.target) === null) continue;
@@ -1751,7 +1794,7 @@ class PrinterView {
         const target = asNumber(temps.target);
         const current = formatTemperature(temps.current);
         cell.appendChild(el("span", "temp-value trunc", target ? `${current} → ${target.toFixed(0)} °C` : current));
-        if (target) cell.classList.add("heating");
+        if (target && heats) cell.classList.add("heating");
         this.tempsEl.appendChild(cell);
       }
     }
@@ -1770,6 +1813,27 @@ class PrinterView {
       }
     }
     this.fansReadout.hidden = this.fansReadout.childElementCount === 0;
+
+    this.resinReadout.replaceChildren();
+    const resin = snapshot.resin;
+    if (resin && caps.includes("resin_status") && !this.poweredOff) {
+      const film = asNumber(resin.release_film);
+      if (film !== null) {
+        const rated = asNumber(resin.release_film_max);
+        const used = asNumber(resin.release_film_used);
+        const value = [film, rated ? ` / ${rated}` : "", used !== null ? ` (${used}%)` : ""].join("");
+        const cell = el("span", "resin-reading", `Release film ${value}`);
+        cell.dataset.reading = "film";
+        cell.title = "Lifts of the release film so far, of the count it is rated for";
+        this.resinReadout.appendChild(cell);
+      }
+      for (const name of resin.device_faults || []) {
+        const chip = el("span", "fault-chip", `${FAULT_LABELS[name] || name} fault`);
+        chip.title = `The printer reports its ${name} check as failing`;
+        this.resinReadout.appendChild(chip);
+      }
+    }
+    this.resinReadout.hidden = this.resinReadout.childElementCount === 0;
 
     const online = this.online();
     const printing = state === "printing";
@@ -2469,6 +2533,12 @@ class Generic3DPrinterCard extends HTMLElement {
       .fan-reading.spinning svg { animation: spin 1.2s linear infinite; color: var(--primary-color); }
       @keyframes spin { to { transform: rotate(360deg); } }
       @media (prefers-reduced-motion: reduce) { .fan-reading.spinning svg { animation: none; } }
+      .resin-readout { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; font-size: 0.8rem; color: var(--secondary-text-color); }
+      .resin-reading { font-variant-numeric: tabular-nums; }
+      .fault-chip {
+        padding: 2px 8px; border-radius: 999px; font-weight: 600;
+        color: var(--error-color, #f44336); border: 1px solid var(--error-color, #f44336);
+      }
 
       .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
       .ctl {
