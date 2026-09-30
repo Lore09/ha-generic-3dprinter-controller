@@ -559,6 +559,12 @@ class SdcpSession(Protocol):
         except TimeoutError as err:
             self._ws = None
             raise UnreachableError(f"timeout contacting {self.config.redacted_url}") from err
+        except RuntimeError as err:
+            # aiohttp's "Session is closed": Home Assistant is stopping.
+            self._ws = None
+            if not self._session.closed:
+                raise
+            raise UnreachableError("the connection to the printer is closed") from err
 
         self._last_frame_at = time.monotonic()
         self._forget_socket_state()

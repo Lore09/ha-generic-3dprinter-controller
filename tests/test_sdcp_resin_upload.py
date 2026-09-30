@@ -127,8 +127,9 @@ async def test_an_upload_returns_once_the_printer_has_checked_and_listed_the_fil
     assert (entry.name, entry.path, entry.size) == ("part.goo", "/local/part.goo", len(body))
     assert resin_printer.status["CurrentStatus"] == [0]
     after = resin_printer.sent_commands[before:]
-    # Several status reads saw the check running, then the folder was listed once.
-    assert after.count(0) >= 3 and after[-1] == 258 and after.count(258) == 1
+    # The folder was listed before the post, several status reads saw the check running,
+    # then the folder was listed again.
+    assert after[after.index(258) + 1 :].count(0) >= 3 and after[-1] == 258 and after.count(258) == 2
     assert "/local/part.goo" in _local(resin_printer)
     await adapter.async_teardown()
 
@@ -161,18 +162,36 @@ async def test_a_check_that_never_ends_is_a_clear_error(
     with pytest.raises(UnreachableError, match=r"still taking part\.goo 0\.2 s after the upload"):
         await adapter.async_upload_file("part.goo", _chunks(b"GOO"))
     assert resin_printer.status["CurrentStatus"] == [2, 8]
-    assert 258 not in resin_printer.sent_commands
+    assert resin_printer.sent_commands.count(258) == 1
     await adapter.async_teardown()
 
 
+@pytest.mark.usefixtures("quick_check")
 async def test_a_folder_list_that_never_comes_leaves_the_upload_unconfirmed(
     resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.1)
+    resin_printer.transfer_window = 0.3
+    adapter = _adapter(resin_printer.port, session)
+    upload = asyncio.create_task(adapter.async_upload_file("part.goo", _chunks(b"GOO")))
+    await _until(lambda: bool(resin_printer.uploads))
+    resin_printer.withhold_file_list = True
+    with pytest.raises(CommandRejectedError, match="could not confirm the upload of /local/part.goo"):
+        await upload
+    await adapter.async_teardown()
+
+
+async def test_a_folder_list_that_never_comes_before_the_upload_sends_nothing(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without the list, a file of that name could already be there."""
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.1)
     resin_printer.withhold_file_list = True
     adapter = _adapter(resin_printer.port, session)
-    with pytest.raises(CommandRejectedError, match="could not confirm the upload of /local/part.goo"):
+    with pytest.raises(CommandRejectedError, match="could not confirm that part.goo is not") as caught:
         await adapter.async_upload_file("part.goo", _chunks(b"GOO"))
+    assert caught.value.reason == "the printer did not list the folder"
+    assert resin_printer.uploads == []
     await adapter.async_teardown()
 
 
@@ -213,7 +232,7 @@ async def test_an_unload_during_the_check_ends_the_wait_without_reconnecting(
     await asyncio.sleep(0.4)
     assert len(resin_printer.sent_commands) == sent
     assert adapter._ws is None  # noqa: SLF001
-    assert 258 not in resin_printer.sent_commands
+    assert resin_printer.sent_commands.count(258) == 1
 
 
 async def test_a_cancelled_upload_stays_cancelled(
@@ -234,7 +253,80 @@ async def test_a_cancelled_upload_stays_cancelled(
         await upload
 
 
+async def test_an_unload_during_the_post_ends_the_upload_without_reconnecting(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """The entry unloads while the last part is on its way; the shared session stays open."""
+    resin_printer.upload_delay = 0.3
+    adapter = _adapter(resin_printer.port, session)
+    upload = asyncio.create_task(adapter.async_upload_file("part.goo", _chunks(b"GOO")))
+    await _until(lambda: bool(resin_printer.uploads))
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+    sent = len(resin_printer.sent_commands)
+    with pytest.raises(UnreachableError, match=r"closed while it checked part\.goo; list its files"):
+        await asyncio.wait_for(upload, 5)
+
+    await asyncio.sleep(0.2)
+    assert len(resin_printer.sent_commands) == sent
+    assert adapter._ws is None  # noqa: SLF001
+    assert resin_printer.connections == 0
+
+
+async def test_an_unload_during_the_idle_check_sends_nothing(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read waits out a withheld push, which a teardown does not cut short."""
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.3)
+    adapter = _adapter(resin_printer.port, session)
+    await adapter.async_read()
+    adapter._attributes_at = None  # noqa: SLF001
+    resin_printer.withhold_attributes = True
+    reads = resin_printer.sent_commands.count(1)
+    upload = asyncio.create_task(adapter.async_upload_file("part.goo", _chunks(b"GOO")))
+    await _until(lambda: resin_printer.sent_commands.count(1) > reads)
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+    sent = len(resin_printer.sent_commands)
+    with pytest.raises(UnreachableError, match="closed before part.goo was sent"):
+        await asyncio.wait_for(upload, 5)
+    assert len(resin_printer.sent_commands) == sent
+    assert resin_printer.uploads == []
+    assert adapter._ws is None  # noqa: SLF001
+
+
+async def test_a_closed_session_is_an_unreachable_printer(resin_printer: FakeResinPrinter) -> None:
+    """Home Assistant closes its session as it stops; a late request must not end in HTTP 500."""
+    session = aiohttp.ClientSession()
+    await session.close()
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(UnreachableError, match="closed"):
+        await adapter.async_setup()
+    with pytest.raises(UnreachableError):
+        await adapter.async_read()
+    assert resin_printer.sent_commands == []
+
+
 # ----------------------------------------------------------------- refusals
+
+
+@pytest.mark.usefixtures("quick_check")
+async def test_a_name_already_on_the_printer_is_refused_before_the_post(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """A re-upload the printer discards would find the old file and read as kept."""
+    adapter = _adapter(resin_printer.port, session)
+    await adapter.async_upload_file("part.goo", _chunks(b"GOO first"))
+    with pytest.raises(CommandRejectedError, match="part.goo is already on the printer; delete or") as caught:
+        await adapter.async_upload_file("slices/part.goo", _chunks(b"GOO second"))
+    assert caught.value.reason == "a file with that name is already on the printer"
+    (chunk,) = resin_printer.uploads
+    assert chunk["File"] == b"GOO first"
+    # The captured file is refused too; another name in the folder is not.
+    with pytest.raises(CommandRejectedError, match="already on the printer"):
+        await adapter.async_upload_file("SUP_allineatore_01_1_202609301434.goo", _chunks(b"GOO"))
+    await adapter.async_upload_file("other.goo", _chunks(b"GOO"))
+    assert len(resin_printer.uploads) == 2
+    await adapter.async_teardown()
+
 
 
 @pytest.mark.parametrize("name", ["part.gcode", "part.bgcode", "part.stl", "part"])

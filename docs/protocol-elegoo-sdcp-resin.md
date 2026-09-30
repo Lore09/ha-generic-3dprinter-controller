@@ -281,8 +281,14 @@ MB `.goo` held `CurrentStatus` [2] for about 9 seconds, then [0], and was listed
 and was never listed. So after the last part the integration reads the status every
 second, for up to 60 seconds, until it leaves 2, then lists `/local` and reports the
 upload only when the file is there, and otherwise that the printer discarded it.
-Unloading the entry during that wait ends it with an error, without reopening the
-socket.
+Unloading the entry at any point of an upload, the parts included, ends it with an
+error, without reopening the socket.
+
+The list names each file by its path alone, with no size or date, so a file the
+printer discards under a name already in `/local` would find the old one and read as
+kept. Before the first part the integration therefore lists `/local`, and refuses
+the upload when a file of that name is there: delete or rename it first. The
+upload is also refused when that list does not come.
 
 ## Camera
 

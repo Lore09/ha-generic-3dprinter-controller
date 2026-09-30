@@ -609,7 +609,7 @@ class SdcpResinProtocol(SdcpSession):
             )
 
     async def _async_list_to_confirm(self, what: str, folder: str) -> list[FileEntry]:
-        """List the folder a delete or an upload touched, and raise when no list arrives,
+        """List the folder a delete or an upload touches, and raise when no list arrives,
         since a missing list would read as a folder without the file."""
         self._file_list_event.clear()
         self._file_list = []
@@ -622,32 +622,44 @@ class SdcpResinProtocol(SdcpSession):
             raise CommandRejectedError(
                 f"could not confirm {what}",
                 code=ack or None,
-                reason="the printer did not list the folder afterwards",
+                reason="the printer did not list the folder",
             )
         return list(self._file_list)
 
     async def async_upload_file(
         self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None
     ) -> FileEntry:
-        """Post one file in chunks, once it is a type the printer prints and the machine is idle,
-        and return it only once the printer lists it after checking it."""
+        """Post one file in chunks, once it is a type the printer prints, the machine is idle and
+        no file has its name, and return it only once the printer lists it after checking it."""
+        teardowns = self._teardowns
+        filename = name.rsplit("/", 1)[-1]
         suffixes = self.upload_suffixes
         if not name.lower().endswith(suffixes):
             raise CommandRejectedError(
-                f"the printer prints only {', '.join(suffixes)} files, not {name.rsplit('/', 1)[-1]}",
+                f"the printer prints only {', '.join(suffixes)} files, not {filename}",
                 reason="the printer does not print this type of file",
             )
         if machine_busy(await self.async_read()):
             raise CommandRejectedError(
                 "the printer takes a file only while it is idle", reason="the printer is not idle"
             )
+        if self._teardowns != teardowns:
+            # The read can outlive an unload; the list would reopen the socket.
+            raise UnreachableError(f"the printer's connection closed before {filename} was sent")
+        what = f"that {filename} is not already on the printer"
+        listed = await self._async_list_to_confirm(what, LOCAL_FOLDER)
+        if any(item.path == f"{LOCAL_FOLDER}/{filename}" for item in listed):
+            # The list gives no size or date, so a discarded re-upload would read as kept.
+            raise CommandRejectedError(
+                f"a file named {filename} is already on the printer; delete or rename it first",
+                reason="a file with that name is already on the printer",
+            )
         sent = await super().async_upload_file(name, stream, size=size)
-        return await self._async_confirm_upload(sent)
+        return await self._async_confirm_upload(sent, teardowns)
 
-    async def _async_confirm_upload(self, sent: FileEntry) -> FileEntry:
+    async def _async_confirm_upload(self, sent: FileEntry, teardowns: int) -> FileEntry:
         """Wait for the printer to leave ``CurrentStatus`` 2, then find the file in its folder:
         a Saturn answers every upload as stored and silently discards a file it cannot print."""
-        teardowns = self._teardowns
         try:
             return await self._async_await_kept(sent, teardowns)
         except (asyncio.CancelledError, ProtocolError):

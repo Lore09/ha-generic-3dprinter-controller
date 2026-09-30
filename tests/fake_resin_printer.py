@@ -105,6 +105,8 @@ class FakeResinPrinter:
         self.uploads: list[dict[str, Any]] = []
         #: The ``code`` an upload chunk is answered with; ``None`` answers with a bare page.
         self.upload_code: str | None = "000000"
+        #: Seconds to hold back the answer to each upload chunk, once it is taken.
+        self.upload_delay = 0.0
         self._transfers: dict[str, bytearray] = {}
         #: Seconds ``CurrentStatus`` holds 2 after an upload's last chunk, as the printer checks
         #: the file (measured: about 9 s); 0 stores it at once.
@@ -295,6 +297,8 @@ class FakeResinPrinter:
                 task.add_done_callback(self._checks.discard)
             elif kept is not None:
                 self.files.append(kept)
+        if self.upload_delay:
+            await asyncio.sleep(self.upload_delay)
         # Measured: a file the printer then discards is answered as stored all the same.
         return web.json_response({"code": "000000", "messages": None, "data": None, "success": True})
 
