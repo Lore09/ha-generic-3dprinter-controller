@@ -10,6 +10,7 @@ It connects to ``ws://<host>:3030/websocket``, sends the read-only queries the
 printer's own web UI sends on load, prints every raw frame, and exits. It never
 sends a command that changes printer state. It refuses a resin printer, which must
 never get command 324; that check imports the integration, as the acceptance tools do.
+A printer that stays silent on UDP gets 324 only once its own frames show it is FDM.
 
 Note on the wire format the printer expects: the request frame carries a bare
 ``Data`` object, but everything the printer *sends back* uses ``Topic`` values
@@ -29,6 +30,9 @@ from typing import Any
 from acceptance_kit import async_refuse_resin
 
 DEFAULT_PORT = 3030
+#: Seconds to wait after connecting, and between the commands.
+SETTLE = 1.0
+GAP = 1.2
 
 CMD_STATUS = 0
 CMD_ATTRIBUTES = 1
@@ -103,6 +107,8 @@ async def run(host: str, port: int, seconds: float) -> int:
 
     if await async_refuse_resin(host):
         return 1
+    from custom_components.generic_3dprinter.adapters import sdcp
+
     print(f"[1] HTTP discovery on {host}")
     mainboard_id = await asyncio.to_thread(discover_mainboard_id, host)
     print(f"    MainboardID = {mainboard_id or '(not exposed over HTTP; try an empty id)'}")
@@ -110,6 +116,7 @@ async def run(host: str, port: int, seconds: float) -> int:
     url = f"ws://{host}:{port}/websocket"
     print(f"[2] connecting {url}")
     frames = 0
+    seen: dict[str, Any] = {"Attributes": {}, "Status": {}}
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None)) as session:
             async with session.ws_connect(url, heartbeat=None, max_msg_size=16 * 1024 * 1024) as ws:
@@ -132,16 +139,28 @@ async def run(host: str, port: int, seconds: float) -> int:
                         except json.JSONDecodeError:
                             print(f"    <- frame {frames} (not JSON) {text[:400]!r}")
                             continue
+                        if not isinstance(parsed, dict):
+                            continue
+                        for key in seen:
+                            inner = parsed.get("Data") if isinstance(parsed.get("Data"), dict) else {}
+                            found = parsed.get(key) or inner.get(key)
+                            if isinstance(found, dict):
+                                seen[key] = found
                         topic = parsed.get("Topic")
                         print(f"    <- frame {frames} Topic={topic}")
                         print(f"       {json.dumps(parsed, indent=2)[:6000]}")
 
                 reader_task = asyncio.create_task(reader())
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(SETTLE)
                 for cmd, data in READ_ONLY_COMMANDS:
+                    kind = sdcp.classify_sdcp(seen["Attributes"], seen["Status"])
+                    if cmd == CMD_MATERIAL and kind != "fdm":
+                        # UDP may be filtered or dropped: a Saturn must never get 324.
+                        print(f"[3] skipped Cmd={cmd}: the printer's frames did not show an FDM printer ({kind})")
+                        continue
                     print(f"[3] -> Cmd={cmd} {json.dumps(data)}")
                     await ws.send_str(envelope(mainboard_id, cmd, data))
-                    await asyncio.sleep(1.2)
+                    await asyncio.sleep(GAP)
                 print(f"[4] draining for {seconds}s")
                 await asyncio.sleep(seconds)
                 reader_task.cancel()

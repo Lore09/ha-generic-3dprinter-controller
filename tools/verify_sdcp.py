@@ -6,7 +6,8 @@ read path from ``docs/research/elegoo-centauri-carbon-sdcp.md`` and prints the
 raw frames so a reviewer can check the report against a real printer.
 
 Read-only by default. ``--start-print`` and ``--upload`` are opt-in because the
-Home Assistant integration reports Cmd 128 crashing this model.
+Home Assistant integration reports Cmd 128 crashing this model. It stops at a resin
+printer (Saturn, Mars), which must get none of this; use acceptance_sdcp_resin.py there.
 
 Examples::
 
@@ -76,6 +77,13 @@ ACK = {
 
 SOI, EOI = b"\xff\xd8", b"\xff\xd9"
 
+#: What only a resin printer reports, as in adapters/sdcp.py, inlined to stay stdlib only.
+RESIN_FILE_TYPES = frozenset({"ctb", "cbddlp", "goo", "prz"})
+FDM_FILE_TYPES = frozenset({"gcode"})
+RESIN_ATTRIBUTES = ("ReleaseFilmMax", "Resolution")
+RESIN_STATUS_KEYS = ("TempOfUVLED", "ReleaseFilm", "TempOfTank")
+FDM_STATUS_KEYS = ("TempOfNozzle", "TempOfHotbed")
+
 
 def log(msg: str) -> None:
     print(msg, flush=True)
@@ -84,6 +92,37 @@ def log(msg: str) -> None:
 def section(title: str) -> None:
     log("")
     log(f"== {title} ==")
+
+
+def is_resin(attrs: Any) -> bool:
+    """Whether SDCP attributes, flat or with nested Attributes and Status, are a resin printer's.
+    The same order as classify_sdcp: file types, resin-only attributes, status, then the name."""
+    if not isinstance(attrs, dict):
+        return False
+    status = attrs.get("Status") if isinstance(attrs.get("Status"), dict) else {}
+    if isinstance(attrs.get("Attributes"), dict):
+        attrs = attrs["Attributes"]
+    types = attrs.get("SupportFileType")
+    types = [types] if isinstance(types, str) else types if isinstance(types, list) else []
+    lowered = {str(item).strip().lower() for item in types}
+    if lowered & RESIN_FILE_TYPES or lowered & FDM_FILE_TYPES:
+        return bool(lowered & RESIN_FILE_TYPES)
+    devices = attrs.get("DevicesStatus")
+    if any(key in attrs for key in RESIN_ATTRIBUTES) or (isinstance(devices, dict) and "LCDStatus" in devices):
+        return True
+    if any(key in status for key in RESIN_STATUS_KEYS + FDM_STATUS_KEYS):
+        return any(key in status for key in RESIN_STATUS_KEYS)
+    name = str(attrs.get("MachineName") or "").lower()
+    return "saturn" in name or "mars" in name
+
+
+def refuse_resin(host: str, attrs: Any) -> bool:
+    """Log why and return True when ``attrs`` are a resin printer's."""
+    if not is_resin(attrs):
+        return False
+    log(f"refused: {host} is a resin printer, and this tool sends Cmd 512, and Cmd 128 or an "
+        "upload when asked. Use tools/acceptance_sdcp_resin.py instead")
+    return True
 
 
 # --- discovery ------------------------------------------------------------
@@ -698,6 +737,10 @@ def main() -> int:
     if not host:
         log("no host to talk to")
         return 1
+    if args.discover and any(
+        refuse_resin(host, entry["raw"].get("Data")) for entry in found if entry["host"] == host
+    ):
+        return 1
 
     if args.upload:
         if not mid:
@@ -727,6 +770,8 @@ def main() -> int:
                         continue
                     attrs = msg.get("Attributes") or (msg.get("Data") or {}).get("Attributes")
                     if isinstance(attrs, dict):
+                        if refuse_resin(host, attrs):
+                            return 1
                         mid = attrs.get("MainboardID")
             if not mid:
                 log("could not learn MainboardID. The printer does not push Attributes "
@@ -734,13 +779,18 @@ def main() -> int:
                 return 1
             log(f"MainboardID {mid}")
 
-            probe_attributes(ws, mid)
+            attrs = probe_attributes(ws, mid)
+            if refuse_resin(host, attrs):
+                return 1
             probe_status(ws, mid, args.period_ms)
             probe_files(ws, mid, args.storage)
             if args.history:
                 probe_history(ws, mid)
 
-            if args.start_print:
+            if args.start_print and not attrs:
+                log("start print skipped: the attributes never arrived, so this may be a resin "
+                    "printer, and the 6-field Cmd 128 must never reach one")
+            elif args.start_print:
                 section("start print: Cmd 128 (opt-in)")
                 log("  the HA integration reports this crashing the CC1 (#297)")
                 msg = request(ws, START_PRINT, {
