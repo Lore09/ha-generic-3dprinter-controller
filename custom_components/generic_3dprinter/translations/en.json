@@ -53,7 +53,10 @@
         "description": "{hazards}\n\nLeave these off unless you accept the risk. You can change them later in the integration options.",
         "data": {
           "unsafe_sdcp_start_print": "Allow starting a print over the network",
-          "unsafe_cc2_start_print": "Allow starting a print over the network"
+          "unsafe_cc2_start_print": "Allow starting a print over the network",
+          "unsafe_kobra_start_print": "Allow starting a print over the network",
+          "unsafe_sdcp_resin_start_print": "Allow starting a resin print over the network",
+          "unsafe_sdcp_resin_camera": "Allow the resin printer's camera"
         }
       }
     },
@@ -85,7 +88,10 @@
           "password": "Password",
           "access_code": "Access code",
           "unsafe_sdcp_start_print": "Allow starting a print over the network",
-          "unsafe_cc2_start_print": "Allow starting a print over the network"
+          "unsafe_cc2_start_print": "Allow starting a print over the network",
+          "unsafe_kobra_start_print": "Allow starting a print over the network",
+          "unsafe_sdcp_resin_start_print": "Allow starting a resin print over the network",
+          "unsafe_sdcp_resin_camera": "Allow the resin printer's camera"
         }
       }
     },

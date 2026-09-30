@@ -722,6 +722,20 @@ async def test_the_shipped_translation_file_matches_strings_json() -> None:
     assert shipped == source
 
 
+async def test_every_opt_in_has_a_label_in_both_flows() -> None:
+    """An opt-in without a label shows its raw key as the checkbox in setup and options."""
+    from custom_components.generic_3dprinter.registry import ADAPTERS
+
+    package = Path(__file__).resolve().parents[1] / "custom_components" / "generic_3dprinter"
+    strings = json.loads((package / "strings.json").read_text(encoding="utf-8"))
+    setup = strings["config"]["step"]["unsafe"]["data"]
+    options = strings["options"]["step"]["init"]["data"]
+    for registration in ADAPTERS.values():
+        for feature in registration.unsafe:
+            key = f"unsafe_{feature.id}"
+            assert key in setup and key in options, key
+
+
 async def test_granted_capabilities_answers_every_capability() -> None:
     """The gate mapping answers ``True`` exactly for the granted set."""
     runtime, _ = build_runtime(frozenset({Capability.PAUSE}))
