@@ -1,5 +1,5 @@
 """Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K. It shares the socket with
-the Centauri Carbon adapter, and sends only the reads, pause, resume, stop, delete and uploads."""
+the Centauri Carbon adapter, and sends only the reads, the job controls, delete and uploads."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from ..models import FileEntry, Percent, PrinterSnapshot, ResinState, Seconds, T
 from ..protocols import (
     DEFAULT_BLOCK_RULES,
     BlockRule,
+    CommandBlockedError,
     CommandRejectedError,
     ConfigError,
     PrinterConfig,
@@ -94,9 +95,9 @@ RETAINED_JOB_STATUS: Final = frozenset({8, 9})
 #: The states in which the job's progress, times and layers mean the job in hand.
 JOB_STATES: Final = frozenset({PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED})
 
-#: The codes a resin printer is sent: the reads, then the job controls and delete (spec en.md:426-535).
+#: The codes a resin printer is sent: the reads, then the job controls and delete (spec en.md:370-535).
 RESIN_COMMAND: Final[Mapping[str, int]] = MappingProxyType(
-    {**SESSION_COMMAND, "pause": 129, "stop": 130, "resume": 131, "delete_files": 259}
+    {**SESSION_COMMAND, "start_print": 128, "pause": 129, "stop": 130, "resume": 131, "delete_files": 259}
 )
 
 #: The job controls, each sent with an empty ``Data`` as the spec shows.
@@ -302,8 +303,8 @@ def _discovery_result(reply: Mapping[str, Any], sender: str) -> DiscoveryResult:
 
 
 class SdcpResinProtocol(SdcpSession):
-    """An Elegoo resin printer on SDCP V3: it reads, pauses, resumes and stops, and uploads
-    and deletes files."""
+    """An Elegoo resin printer on SDCP V3: it reads, starts (opted in), pauses, resumes and stops,
+    and uploads and deletes files."""
 
     commands = RESIN_COMMAND
     command_ack_messages = RESIN_ACK_MESSAGES
@@ -483,7 +484,10 @@ class SdcpResinProtocol(SdcpSession):
     # ---------------------------------------------------------------- commands
 
     async def _async_dispatch(self, command: Command, params: Mapping[str, Any]) -> None:
-        """Send pause, resume or stop with an empty ``Data``, or delete one file."""
+        """Send pause, resume or stop with an empty ``Data``, or start or delete one file."""
+        if command is Command.START_PRINT:
+            await self._async_start_print(str(params["filename"]))
+            return
         if command is Command.DELETE_FILE:
             await self._async_delete_file(str(params["filename"]))
             return
@@ -491,6 +495,22 @@ class SdcpResinProtocol(SdcpSession):
         if name is None:
             raise ProtocolError(f"the resin adapter cannot send {command.value}")
         await self._async_send_checked(name, {})
+
+    async def _async_start_print(self, filename: str) -> None:
+        """Start one file of ``/local`` with the spec's two fields, never the Centauri's six,
+        once a fresh status says the machine is idle: the last poll may be a minute old."""
+        folder, _, name = filename.rpartition("/")
+        if folder not in ("", LOCAL_FOLDER) or not name.lower().endswith(self.upload_suffixes):
+            raise CommandRejectedError(
+                f"the printer starts only its own {', '.join(self.upload_suffixes)} files in "
+                f"{LOCAL_FOLDER}, not {filename}",
+                reason="the file is not one the printer starts",
+            )
+        await self._async_refresh_status()
+        flags = status_flags(self._status.get("CurrentStatus"))
+        if not self._status_event.is_set() or machine_for(flags) != "idle":
+            raise CommandBlockedError(Command.START_PRINT, "the printer is not idle")
+        await self._async_send_checked("start_print", {"Filename": name, "StartLayer": 0})
 
     async def _async_delete_file(self, filename: str) -> None:
         """Delete one file, then list its folder: the printer acks 0 even for a path it lacks,

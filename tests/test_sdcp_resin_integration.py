@@ -98,6 +98,9 @@ async def test_the_flow_learns_the_mainboard_id(hass: HomeAssistant, monkeypatch
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"name": "Saturn", "host": "192.0.2.43"}
         )
+        assert result["step_id"] == "unsafe"
+        assert "sdcp_resin_start_print" in str(result["data_schema"].schema)
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     assert result["data"]["protocol"] == "sdcp_resin"
     assert result["data"]["serial"] == SATURN
@@ -128,7 +131,7 @@ async def test_the_flow_refuses(
     assert detail in result["description_placeholders"]["detail"]
 
 
-def _entry(hass: HomeAssistant, port: int, serial: str) -> MockConfigEntry:
+def _entry(hass: HomeAssistant, port: int, serial: str, **extra: Any) -> MockConfigEntry:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Saturn",
@@ -139,6 +142,7 @@ def _entry(hass: HomeAssistant, port: int, serial: str) -> MockConfigEntry:
             "port": port,
             "serial": serial,
             "scan_interval": 5,
+            **extra,
         },
         unique_id=f"sdcp_resin:{serial}",
     )
@@ -178,6 +182,8 @@ async def test_a_saturn_entry_has_only_resin_entities(
         "verified": True,
     }
     assert described["printer"]["resin"]["machine"] == "idle"
+    assert "start_print" not in described["printer"]["capabilities"]
+    assert [item["id"] for item in described["unsafe_features"]] == ["sdcp_resin_start_print"]
     assert described["printer"]["progress"] is None
     assert described["printer"]["filename"] == "SUP_allineatore_01_1_202609301434.goo"
 
@@ -251,4 +257,28 @@ async def test_the_card_uploads_a_goo_file_to_the_socket_port(
     assert len(resin_printer.uploads) == 1
     assert set(resin_printer.sent_commands) <= {0, 1, 258}
     assert resin_printer.forbidden == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_opted_in_entry_starts_a_listed_file_with_two_fields(
+    hass: HomeAssistant, hass_ws_client: Any, resin_printer: FakeResinPrinter
+) -> None:
+    """The card sends the listed path; the printer gets its bare name and layer 0, nothing more."""
+    entry = _entry(hass, resin_printer.port, SATURN, unsafe_enabled=["sdcp_resin_start_print"])
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    websocket = await hass_ws_client(hass)
+    await websocket.send_json({"id": 1, "type": "generic_3dprinter/describe", "entry_id": entry.entry_id})
+    described = (await websocket.receive_json())["result"]
+    assert "start_print" in described["printer"]["capabilities"]
+    assert described["unsafe_features"] == []
+
+    await websocket.send_json({"id": 2, "type": "generic_3dprinter/send", "entry_id": entry.entry_id,
+                               "command": "start_print",
+                               "data": {"filename": "/local/SUP_allineatore_01_1_202609301434.goo"}})
+    assert (await websocket.receive_json())["success"]
+    acts = [(item["Cmd"], item["Data"]) for item in resin_printer.received if item["Cmd"] not in (0, 1, 258)]
+    assert acts == [(128, {"Filename": "SUP_allineatore_01_1_202609301434.goo", "StartLayer": 0})]
+    assert resin_printer.forbidden == []
+    assert not resin_printer.crashed
     assert await hass.config_entries.async_unload(entry.entry_id)

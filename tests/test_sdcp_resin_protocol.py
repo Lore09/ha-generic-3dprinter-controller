@@ -22,6 +22,7 @@ from custom_components.generic_3dprinter.const import Capability, Command, Print
 from custom_components.generic_3dprinter.protocols import (
     ConfigError,
     ProtocolError,
+    UnsafeCommandError,
     UnsupportedCommandError,
     WrongPrinterError,
     parse_config,
@@ -196,7 +197,7 @@ def test_an_empty_status_is_unknown() -> None:
 
 def test_it_can_send_only_reads_and_the_job_controls() -> None:
     codes = set(SdcpResinProtocol.commands.values())
-    assert codes == {0, 1, 258, 129, 130, 131, 259}
+    assert codes == {0, 1, 258, 128, 129, 130, 131, 259}
     assert not codes & {324, 387, 403}
     for name in ("set_printer_params", "_async_read_canvas", "camera_url", "web_ui_url", "_async_enable_video"):
         assert not hasattr(SdcpResinProtocol, name), name
@@ -209,9 +210,11 @@ async def test_every_command_but_the_controls_is_refused_before_the_wire(
     adapter = _adapter(resin_printer.port, session)
     await adapter.async_read()
     before = list(resin_printer.sent_commands)
-    for command in set(Command) - CONTROLS:
+    for command in set(Command) - CONTROLS - {Command.START_PRINT}:
         with pytest.raises(UnsupportedCommandError):
             await adapter.async_send(command, **SAMPLE_PARAMS[command])
+    with pytest.raises(UnsafeCommandError):
+        await adapter.async_send(Command.START_PRINT, filename="part.goo")
     with pytest.raises(ProtocolError):
         await adapter.async_upload_file("part.gcode", _chunks(b"x"))
     assert resin_printer.sent_commands == before

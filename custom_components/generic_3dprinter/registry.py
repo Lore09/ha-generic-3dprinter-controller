@@ -107,6 +107,24 @@ _UNSAFE_KOBRA_START_PRINT: Final = UnsafeFeature(
     evidence="the minimal print/start payload from the Rinkhals MQTT documentation, Kobra 3",
 )
 
+_UNSAFE_SDCP_RESIN_START_PRINT: Final = UnsafeFeature(
+    id="sdcp_resin_start_print",
+    label="Allow starting a print over the network",
+    reason=(
+        "Starting a print lowers the platform into the vat and exposes the resin with "
+        "nobody at the printer. It needs resin in the vat and a clean vat and platform, "
+        "which nothing on the network can check. This project has not yet started a "
+        "print on a resin printer: the request follows the SDCP V3 spec. Enable this "
+        "only if you accept that a print can start while the printer is not ready."
+    ),
+    gates=frozenset({Capability.START_PRINT}),
+    evidence=(
+        "command 128 with only Filename and StartLayer 0, from the SDCP V3 spec (en.md:370-390) "
+        "and cuprum; reported to start a print on a Saturn 4 Ultra 16K on V1.5.6 by "
+        "alfiedennen/sdcp-saturn-4-ultra, and not measured by this project"
+    ),
+)
+
 #: What every Kobra of the signed-handshake generation can express.
 _KOBRA_BASE: Final = frozenset(
     {
@@ -164,9 +182,10 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
 )
 
 #: What every SDCP V3 resin printer has: its state, phase, UV LED and film, its files, their
-#: upload to port 3030, and pause, resume, stop and delete (spec en.md:426-535, 1017-1021).
+#: upload to port 3030, and start (opted in), pause, resume, stop and delete (spec en.md:370-535).
 _RESIN_BASE: Final = frozenset(
     {
+        Capability.START_PRINT,
         Capability.FILE_LIST,
         Capability.FILE_UPLOAD,
         Capability.RESIN_STATUS,
@@ -315,11 +334,12 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             id=ProtocolId.SDCP_RESIN,
             label="Elegoo resin (Saturn, Mars) – SDCP",
             adapter=_resolve(_ADAPTER_MODULES["sdcp_resin"], "SdcpResinProtocol"),  # type: ignore[arg-type]
-            # No start print or camera until each is measured on a printer.
+            # Start print is withheld by its opt-in; no camera until it is measured on a printer.
             capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
             models=SDCP_RESIN_MODELS,
             fields=("port", "serial"),
             ports=(3030,),
+            unsafe=(_UNSAFE_SDCP_RESIN_START_PRINT,),
             evidence={
                 "verified": (
                     "a Saturn 4 Ultra 16K on firmware V1.5.6 answered commands 0, 1, 258 "
@@ -336,11 +356,13 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "delete lists the folder afterwards, since 259 acks a missing path too. "
                     "Uploads post the Centauri's chunked form to port 3030, as the spec and "
                     "that project give, only while the machine is idle, and only the file "
-                    "types the printer names in SupportFileType"
+                    "types the printer names in SupportFileType. Start print (128), behind "
+                    "its opt-in, sends only Filename and StartLayer 0 for a file in /local, "
+                    "as the spec gives, once a fresh status says the machine is idle"
                 ),
                 "absent": (
-                    "starting a print and the camera, until each is measured on a printer; "
-                    "the vat's target, which no command sets"
+                    "the camera, until it is measured on a printer; the vat's target, which "
+                    "no command sets"
                 ),
             },
         ),

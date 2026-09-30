@@ -1,5 +1,5 @@
-"""Pause, resume, stop and delete on the fake Saturn, with the exact frames each one sends,
-and the rule that keeps a print from starting on a machine that is not idle."""
+"""Start, pause, resume, stop and delete on the fake Saturn, with the exact frames each one sends,
+and the rules that keep a print from starting unasked or on a machine that is not idle."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from custom_components.generic_3dprinter.models import PrinterSnapshot, ResinSta
 from custom_components.generic_3dprinter.protocols import (
     CommandBlockedError,
     CommandRejectedError,
+    UnsafeCommandError,
     parse_config,
 )
 from custom_components.generic_3dprinter.registry import build_adapter
@@ -46,14 +47,15 @@ async def printing_fixture() -> AsyncIterator[FakeResinPrinter]:
         await server.stop()
 
 
-def _config(port: int) -> Any:
+def _config(port: int, **extra: Any) -> Any:
     return parse_config(
         {"name": "Saturn", "protocol": "sdcp_resin", "host": "127.0.0.1", "port": port, "serial": SATURN}
+        | extra
     )
 
 
-def _adapter(port: int, session: aiohttp.ClientSession) -> SdcpResinProtocol:
-    adapter = build_adapter(_config(port), session)
+def _adapter(port: int, session: aiohttp.ClientSession, **extra: Any) -> SdcpResinProtocol:
+    adapter = build_adapter(_config(port, **extra), session)
     assert isinstance(adapter, SdcpResinProtocol)
     return adapter
 
@@ -117,6 +119,107 @@ async def test_start_print_and_video_acks_read_their_own_meaning(
             await adapter._async_send_checked(name, {})  # noqa: SLF001
         assert caught.value.reason == reason, (name, ack)
     assert resin_printer.sent_commands == []
+
+
+# ------------------------------------------------------------- start print
+
+
+def _opted_in(port: int, session: aiohttp.ClientSession) -> SdcpResinProtocol:
+    return _adapter(port, session, unsafe_enabled=["sdcp_resin_start_print"])
+
+
+async def test_start_print_is_refused_without_the_opt_in(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    adapter = _adapter(resin_printer.port, session)
+    snapshot = await adapter.async_read()
+    assert Capability.START_PRINT not in snapshot.capabilities
+    before = list(resin_printer.sent_commands)
+    with pytest.raises(UnsafeCommandError, match="exposes the resin"):
+        await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
+    assert resin_printer.sent_commands == before == [1, 0]
+    assert [feature.id for feature in adapter.unsafe_features] == ["sdcp_resin_start_print"]
+    await adapter.async_teardown()
+
+
+@pytest.mark.parametrize("filename", [CAPTURED_FILE, CAPTURED_FILE.rsplit("/", 1)[1]], ids=["path", "name"])
+async def test_an_opted_in_start_sends_the_bare_name_and_layer_0(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, filename: str
+) -> None:
+    """The spec's two fields only: any other key would crash the fake, as it might the printer."""
+    adapter = _opted_in(resin_printer.port, session)
+    snapshot = await adapter.async_read()
+    assert Capability.START_PRINT in snapshot.capabilities
+    await adapter.async_send(Command.START_PRINT, filename=filename)
+    assert _acts(resin_printer) == [{128: {"Filename": CAPTURED_FILE.rsplit("/", 1)[1], "StartLayer": 0}}]
+    assert resin_printer.sent_commands[-2:] == [0, 128]
+    assert resin_printer.forbidden == []
+    assert not resin_printer.crashed
+    await adapter.async_teardown()
+
+
+@pytest.mark.parametrize("filename", ["/usb/part.goo", "part.gcode", "/local/"])
+async def test_a_file_the_printer_would_not_start_by_name_stays_off_the_wire(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, filename: str
+) -> None:
+    """A bare name means ``/local``, so a USB file would name another; G-code is no resin job."""
+    adapter = _opted_in(resin_printer.port, session)
+    await adapter.async_read()
+    with pytest.raises(CommandRejectedError, match="starts only its own .ctb, .goo files"):
+        await adapter.async_send(Command.START_PRINT, filename=filename)
+    assert 128 not in resin_printer.sent_commands
+    await adapter.async_teardown()
+
+
+async def test_a_print_started_since_the_last_poll_blocks_the_start(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """The last snapshot reads idle, so only the fresh status stops the second job."""
+    adapter = _opted_in(resin_printer.port, session)
+    assert (await adapter.async_read()).blocked == {}
+    resin_printer.status["CurrentStatus"] = [1]
+    with pytest.raises(CommandBlockedError, match="the printer is not idle"):
+        await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
+    assert resin_printer.sent_commands == [1, 0, 0]
+    await adapter.async_teardown()
+
+
+async def test_a_status_that_never_comes_blocks_the_start(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.1)
+    adapter = _opted_in(resin_printer.port, session)
+    await adapter.async_read()
+    resin_printer.withhold_status = True
+    with pytest.raises(CommandBlockedError, match="the printer is not idle"):
+        await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
+    assert 128 not in resin_printer.sent_commands
+    await adapter.async_teardown()
+
+
+@pytest.mark.parametrize("code", [2, 8], ids=["file_transferring", "file_received"])
+async def test_an_opted_in_start_waits_for_an_idle_machine(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, code: int
+) -> None:
+    resin_printer.status["CurrentStatus"] = [code]
+    adapter = _opted_in(resin_printer.port, session)
+    assert (await adapter.async_read()).blocked == {Command.START_PRINT: "the printer is not idle"}
+    with pytest.raises(CommandBlockedError, match="the printer is not idle"):
+        await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
+    assert 128 not in resin_printer.sent_commands
+    await adapter.async_teardown()
+
+
+async def test_a_refused_start_says_why(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    resin_printer.acks[128] = 5
+    adapter = _opted_in(resin_printer.port, session)
+    with pytest.raises(CommandRejectedError) as caught:
+        await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
+    assert (caught.value.code, caught.value.reason) == (5, "the file's resolution does not match the printer")
+    assert resin_printer.forbidden == []
+    await adapter.async_teardown()
 
 
 # ------------------------------------------------------------------ delete
