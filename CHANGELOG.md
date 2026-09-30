@@ -65,6 +65,10 @@
   button does: whether the vat holds resin and the vat and platform are clean on a
   resin printer, whether the bed is clear otherwise. It asks before the upload
   starts, and a declined print still uploads the file.
+* **Unticking "Verify the TLS certificate" now works**, so a Moonraker, OctoPrint,
+  Duet or web page behind a self-signed certificate can be added; the box did
+  nothing and every certificate was checked. It is no longer asked for Elegoo and
+  Anycubic printers, which have no HTTPS address for it to apply to.
 * An entry whose printer left a request unanswered during setup, such as an SDCP
   command 1, failed for good; it now retries.
 * A second connection attempt to a Centauri Carbon that was already connected

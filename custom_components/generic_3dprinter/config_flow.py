@@ -70,6 +70,11 @@ _CREDENTIAL_LABELS = {
 }
 
 
+def _asks_verify_ssl(registration: AdapterRegistration) -> bool:
+    """Return whether this protocol can reach an HTTPS address, so the certificate box means something."""
+    return CONF_TLS in registration.fields or CONF_WEB_URL in registration.fields
+
+
 def _port_or(value: Any, default: int) -> int:
     """Return a stored port as a number, or ``default`` when none was entered."""
     try:
@@ -378,9 +383,10 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
         if CONF_SERIAL in registration.fields:
             fields[vol.Optional(CONF_SERIAL, default=self._data.get(CONF_SERIAL) or "")] = str
 
-        fields[
-            vol.Optional(CONF_VERIFY_SSL, default=self._data.get(CONF_VERIFY_SSL, True))
-        ] = selector.BooleanSelector()
+        if _asks_verify_ssl(registration):
+            fields[
+                vol.Optional(CONF_VERIFY_SSL, default=self._data.get(CONF_VERIFY_SSL, True))
+            ] = selector.BooleanSelector()
         fields[
             vol.Optional(
                 CONF_SCAN_INTERVAL,
@@ -460,10 +466,11 @@ class Generic3DPrinterOptionsFlow(OptionsFlow):
                     min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL, unit_of_measurement="s"
                 )
             ),
-            vol.Optional(
-                CONF_VERIFY_SSL, default=current.get(CONF_VERIFY_SSL, True)
-            ): selector.BooleanSelector(),
         }
+        if _asks_verify_ssl(registration):
+            schema[
+                vol.Optional(CONF_VERIFY_SSL, default=current.get(CONF_VERIFY_SSL, True))
+            ] = selector.BooleanSelector()
 
         if CONF_SERIAL in registration.fields:
             schema[vol.Optional(CONF_SERIAL, default=current.get(CONF_SERIAL) or "")] = str

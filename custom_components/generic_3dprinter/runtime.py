@@ -41,14 +41,16 @@ IDLE_STOP_DELAY = 20.0
 MAX_BACKOFF = 30.0
 
 
-def create_session() -> aiohttp.ClientSession:
+def create_session(verify_ssl: bool = True) -> aiohttp.ClientSession:
     """Create the HTTP session one printer's adapters share.
 
     A dedicated session keeps long-lived camera and WebSocket connections out of
-    Home Assistant's shared pool, and lets one printer be torn down without
-    disturbing another.
+    Home Assistant's shared pool, lets one printer be torn down without disturbing
+    another, and lets each printer decide whether its HTTPS certificate is checked.
     """
-    connector = aiohttp.TCPConnector(limit=0, limit_per_host=0, ttl_dns_cache=300)
+    connector = aiohttp.TCPConnector(
+        limit=0, limit_per_host=0, ttl_dns_cache=300, ssl=bool(verify_ssl)
+    )
     return aiohttp.ClientSession(
         connector=connector, timeout=aiohttp.ClientTimeout(total=None)
     )

@@ -69,7 +69,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("protocol for %s is not available: %s", entry.title, err)
         return False
 
-    session = create_session()
+    session = create_session(config.verify_ssl)
     adapter = build_adapter(config, session)
     tokens = await TokenManager.async_create(hass)
     web_proxy = WebProxyRuntime(config)
