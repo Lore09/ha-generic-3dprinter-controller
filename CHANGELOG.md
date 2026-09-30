@@ -61,6 +61,10 @@
   temperature, fan and light command, which a resin printer does not have. It now
   stops with an error saying what answered, before any such command, and discovery
   and the config flow no longer offer a resin printer as a Centauri Carbon.
+* **"Print when uploaded" on the card's Files tab now asks first**, as the print
+  button does: whether the vat holds resin and the vat and platform are clean on a
+  resin printer, whether the bed is clear otherwise. It asks before the upload
+  starts, and a declined print still uploads the file.
 * An entry whose printer left a request unanswered during setup, such as an SDCP
   command 1, failed for good; it now retries.
 * A second connection attempt to a Centauri Carbon that was already connected

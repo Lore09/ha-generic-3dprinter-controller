@@ -1242,6 +1242,53 @@ test("a file is uploaded through the authenticated endpoint", async () => {
   assert.equal(uploads[0].init.body.get("file").name, "part.gcode");
 });
 
+/** Upload `name` with "Print when uploaded" ticked; `order` notes the uploads before each question. */
+async function uploadAndPrint(printer, name, confirm) {
+  printer.printer.capabilities = [...printer.printer.capabilities, "start_print"];
+  const mountedCard = await mountCard({
+    printers: [{ entry_id: "entry1", name: "Printer" }],
+    descriptions: { entry1: printer },
+    files: FILES,
+    confirm,
+  });
+  const { card, window, confirmations, uploads } = mountedCard;
+  const order = [];
+  window.confirm = (message) => {
+    confirmations.push(message);
+    order.push(`confirm after ${uploads.length} uploads`);
+    return confirm;
+  };
+  await openTab(card, "files");
+  card.shadowRoot.querySelector(".print-after input").checked = true;
+  const input = card.shadowRoot.querySelector(".upload-input");
+  Object.defineProperty(input, "files", { value: [new window.File(["data"], name)], configurable: true });
+  input.dispatchEvent(new window.Event("change"));
+  await tick(40);
+  return { ...mountedCard, order };
+}
+
+for (const [kind, build, name, check] of [
+  ["resin", () => saturn(), "part.goo", /part\.goo\? Make sure the vat holds resin and the vat and platform are clean/],
+  ["FDM", () => idleCc2(), "part.gcode", /part\.gcode\? Make sure the bed is clear/],
+]) {
+  test(`printing an upload on the ${kind} printer asks first and still uploads when declined`, async () => {
+    const { calls, uploads, confirmations, order } = await uploadAndPrint(build(), name, false);
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0], check);
+    assert.deepEqual(order, ["confirm after 0 uploads"], "the question comes before the upload");
+    assert.equal(uploads.length, 1);
+    assert.deepEqual(sent(calls), []);
+  });
+
+  test(`printing an upload on the ${kind} printer starts it once confirmed`, async () => {
+    const { calls, uploads, confirmations, order } = await uploadAndPrint(build(), name, true);
+    assert.match(confirmations[0], check);
+    assert.deepEqual(order, ["confirm after 0 uploads"]);
+    assert.equal(uploads.length, 1);
+    assert.deepEqual(sent(calls).map((call) => [call.command, call.data]), [["start_print", { filename: name }]]);
+  });
+}
+
 test("the file picker offers the types the printer stores", async () => {
   const resin = idleCc2({ upload_suffixes: [".ctb", ".goo"] });
   const { card } = await mountCard({

@@ -1459,11 +1459,13 @@ class PrinterView {
   }
 
   async upload(file) {
+    // Asked before the upload, so a declined print still uploads the file.
+    const print = this.printAfterInput.checked && this.capabilities.includes("start_print") && this.confirmPrint(file.name);
     this.uploading = file.name;
     this._paintFiles();
     try {
       const stored = await this.card.upload(this.entryId, file);
-      if (this.printAfterInput.checked && this.capabilities.includes("start_print") && stored) {
+      if (print && stored) {
         await this.card.send(this.entryId, "start_print", { filename: stored.path || stored.name });
       }
     } finally {
@@ -1472,11 +1474,16 @@ class PrinterView {
     }
   }
 
-  printFile(file) {
+  /** Ask before a print starts: the vat and platform on a resin printer, the bed otherwise. */
+  confirmPrint(name) {
     const check = this.capabilities.includes("resin_status")
       ? "Make sure the vat holds resin and the vat and platform are clean."
       : "Make sure the bed is clear.";
-    if (!this.card.confirm(`Start printing ${baseName(file.name)}? ${check}`)) return;
+    return this.card.confirm(`Start printing ${baseName(name)}? ${check}`);
+  }
+
+  printFile(file) {
+    if (!this.confirmPrint(file.name)) return;
     this.card.send(this.entryId, "start_print", { filename: file.path || file.name });
   }
 
