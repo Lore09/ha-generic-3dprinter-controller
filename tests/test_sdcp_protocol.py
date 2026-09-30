@@ -324,6 +324,7 @@ def test_the_light_is_reported_on_only_when_it_is_on(second_light: int, expected
         adapter._status = {"LightStatus": {"SecondLight": second_light}}  # noqa: SLF001
         adapter._reader = asyncio.get_running_loop().create_future()  # noqa: SLF001 - a live reader
         adapter._ws = type("Ws", (), {"closed": False})()  # noqa: SLF001
+        adapter._identity_checked = True  # noqa: SLF001
         snapshot = await adapter.async_read()
         return LightChannel.CHAMBER in snapshot.lights
 

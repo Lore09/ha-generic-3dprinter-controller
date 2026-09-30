@@ -464,6 +464,9 @@ class SdcpSession(Protocol):
         self._file_list_event = asyncio.Event()
         self._mainboard_id = ""
         self._send_lock = asyncio.Lock()
+        #: Held while a socket opens and its printer is checked; nothing else is sent meanwhile.
+        self._setup_lock = asyncio.Lock()
+        self._identity_checked = False
         self._heartbeat: asyncio.Task[None] | None = None
         #: When the printer last sent anything, and when it last sent its status.
         self._last_frame_at = 0.0
@@ -519,8 +522,12 @@ class SdcpSession(Protocol):
         later reconnect a silent no-op and the integration sticks at offline until
         somebody reloads it by hand.
         """
-        if self._connected:
-            return
+        async with self._setup_lock:
+            if self._ready:
+                return
+            await self._async_open()
+
+    async def _async_open(self) -> None:
         await self._reset_socket()
 
         self._attributes_event.clear()
@@ -559,6 +566,7 @@ class SdcpSession(Protocol):
             # A socket whose printer was never checked must not carry the next request.
             await self._async_close_socket()
             raise
+        self._identity_checked = True
         _LOGGER.debug(
             "%s: SDCP ready, mainboard %s, firmware %s",
             self.config.name,
@@ -568,7 +576,7 @@ class SdcpSession(Protocol):
 
     async def _async_greet(self) -> None:
         """Read the attributes, then the status, checking the printer after each."""
-        await self._async_request(self.commands["attributes"])
+        await self._async_request(self.commands["attributes"], greeting=True)
         with suppress(TimeoutError):
             await asyncio.wait_for(self._attributes_event.wait(), timeout=PUSH_TIMEOUT)
         await self._check_identity()
@@ -577,7 +585,7 @@ class SdcpSession(Protocol):
         # Like the printer's own page, ask for the status on every connection. The
         # printer pushes it only when asked, so a status cached from before a power
         # cycle would otherwise be reported until somebody opened that page.
-        await self._async_refresh_status()
+        await self._async_refresh_status(greeting=True)
         await self._check_identity()
 
     @property
@@ -594,6 +602,11 @@ class SdcpSession(Protocol):
             return False
         return self._reader is not None and not self._reader.done()
 
+    @property
+    def _ready(self) -> bool:
+        """Return ``True`` for a live socket whose printer has been checked."""
+        return self._connected and self._identity_checked
+
     async def _reset_socket(self) -> None:
         """Drop the socket, its reader, its heartbeat and any request waiting on it.
 
@@ -609,6 +622,7 @@ class SdcpSession(Protocol):
 
     async def _async_close_socket(self) -> None:
         """Stop the heartbeat and the reader and close the socket. Idempotent."""
+        self._identity_checked = False
         heartbeat, self._heartbeat = self._heartbeat, None
         if heartbeat is not None and not heartbeat.done() and heartbeat is not asyncio.current_task():
             heartbeat.cancel()
@@ -747,10 +761,10 @@ class SdcpSession(Protocol):
                     await ws.close()
                 break
 
-    async def _async_refresh_status(self) -> None:
+    async def _async_refresh_status(self, *, greeting: bool = False) -> None:
         """Ask for the status, as the page does, and wait briefly for the push."""
         self._status_event.clear()
-        await self._async_request(self.commands["status"])
+        await self._async_request(self.commands["status"], greeting=greeting)
         with suppress(TimeoutError):
             await asyncio.wait_for(self._status_event.wait(), timeout=PUSH_TIMEOUT)
 
@@ -762,6 +776,7 @@ class SdcpSession(Protocol):
         data: Mapping[str, Any] | None = None,
         *,
         timeout: float | None = None,
+        greeting: bool = False,
     ) -> Mapping[str, Any] | None:
         """Send one request and wait for its acknowledgement frame.
 
@@ -769,8 +784,12 @@ class SdcpSession(Protocol):
         missing, because a printer that has been switched off leaves a socket object
         behind whose ``closed`` flag is the only sign that it is gone.
         """
-        if not self._connected:
-            await self.async_setup()
+        # Only the greet sends to a printer that has not been checked yet.
+        if not greeting:
+            if not self._ready:
+                await self.async_setup()
+            # The attributes or the status can arrive after the greet let the printer through.
+            await self._check_identity()
         ws = self._ws
         if ws is None or ws.closed:
             raise UnreachableError("the SDCP socket is not open")
@@ -975,7 +994,7 @@ class SdcpProtocol(SdcpSession):
         a one-shot request keeps working, so the poll path is the reliable one and
         the push is the optimisation.
         """
-        if not self._connected:
+        if not self._ready:
             await self.async_setup()
 
         stale = self._status_at is not None and time.monotonic() - self._status_at > STATUS_MAX_AGE

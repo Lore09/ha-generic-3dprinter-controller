@@ -269,6 +269,7 @@ def _sdcp_adapter(granted: frozenset[Capability]) -> tuple[sdcp.SdcpProtocol, li
     adapter = sdcp.SdcpProtocol(config, object(), granted=granted)  # type: ignore[arg-type]
     adapter._reader = asyncio.get_running_loop().create_future()  # noqa: SLF001 - a live reader
     adapter._ws = type("Ws", (), {"closed": False})()  # noqa: SLF001
+    adapter._identity_checked = True  # noqa: SLF001
     sent: list[int] = []
     answers: list[Any] = []
 

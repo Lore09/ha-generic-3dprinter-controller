@@ -13,8 +13,9 @@ from typing import Any
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sdcp_saturn4u16k_v156_idle.json"
 
-#: The only command codes the SDCP V3 spec gives a resin printer.
-ALLOWED = frozenset({0, 1, 128, 129, 130, 131, 258, 259, 320, 321, 386, 387})
+#: The command codes the SDCP V3 spec gives a resin printer, less 387: the timelapse
+#: switch is a setting that outlives the print and can disturb the next one.
+ALLOWED = frozenset({0, 1, 128, 129, 130, 131, 258, 259, 320, 321, 386})
 #: The one start-print payload the spec defines.
 START_PRINT_KEYS = frozenset({"Filename", "StartLayer"})
 
@@ -71,6 +72,10 @@ class FakeResinPrinter:
         self.ignored: list[dict[str, Any]] = []
         #: Answer command 1 with its ack alone, never pushing the attributes.
         self.withhold_attributes = False
+        #: Answer command 0 with its ack alone, never pushing the status.
+        self.withhold_status = False
+        #: Seconds to hold back the answer to a command, by code.
+        self.answer_delay: dict[int, float] = {}
         #: Close a client that has sent no command for this many seconds. ``None`` keeps it.
         self.silent_close_after: float | None = None
         #: RTSP sessions open, as the attributes count them, and every 386 ``Enable`` sent.
@@ -112,6 +117,12 @@ class FakeResinPrinter:
                 await self._runner.cleanup()
             self._runner = None
         await asyncio.sleep(0)
+
+    async def push(self, kind: str) -> None:
+        """Push the ``attributes`` or the ``status`` to every open socket, unasked."""
+        key, body = ("Attributes", self.attributes) if kind == "attributes" else ("Status", self.status)
+        for socket in list(self._sockets):
+            await socket.send_str(self._push(kind, key, body))
 
     async def _close_all(self) -> None:
         for socket in list(self._sockets):
@@ -176,6 +187,10 @@ class FakeResinPrinter:
         if self.strict_envelope and not self._envelope_ok(frame, inner):
             self.ignored.append(inner)
             return
+        if cmd in self.answer_delay:
+            await asyncio.sleep(self.answer_delay[cmd])
+            if ws.closed:
+                return
 
         if cmd == 1:
             await ws.send_str(self._response(cmd, request_id, {"Ack": 0}))
@@ -184,7 +199,8 @@ class FakeResinPrinter:
                 await ws.send_str(self._push("attributes", "Attributes", attributes))
         elif cmd == 0:
             await ws.send_str(self._response(cmd, request_id, {"Ack": 0}))
-            await ws.send_str(self._push("status", "Status", self.status))
+            if not self.withhold_status:
+                await ws.send_str(self._push("status", "Status", self.status))
         elif cmd == 258:
             await ws.send_str(self._response(cmd, request_id, self.frames["file_list"]["Data"]["Data"]))
         elif cmd == 320:

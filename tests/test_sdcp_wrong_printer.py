@@ -104,6 +104,96 @@ async def test_an_unanswered_command_one_closes_the_socket(
     await adapter.async_teardown()
 
 
+def _framed(adapter: sdcp.SdcpProtocol) -> list[int]:
+    """Record every command the adapter frames, whether or not the printer reads it."""
+    framed: list[int] = []
+    frame = adapter._frame  # noqa: SLF001
+
+    def record(cmd: int, data: Any) -> tuple[str, str]:
+        framed.append(cmd)
+        return frame(cmd, data)
+
+    adapter._frame = record  # type: ignore[method-assign]  # noqa: SLF001
+    return framed
+
+
+async def _until(condition: Any) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the condition never held")
+
+
+async def test_a_command_waits_while_the_printer_is_checked(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """A light change that arrives mid-greet must not reach a socket whose printer is unchecked."""
+    resin_printer.answer_delay = {1: 0.3}
+    adapter = _adapter(resin_printer, session)
+    framed = _framed(adapter)
+    setup = asyncio.create_task(adapter.async_setup())
+    await _until(lambda: adapter._ws is not None)  # noqa: SLF001
+    with pytest.raises(WrongPrinterError):
+        await adapter.set_printer_params({"LightStatus": {"SecondLight": 1}})
+    with pytest.raises(WrongPrinterError):
+        await setup
+    assert set(framed) == {1}
+    assert resin_printer.forbidden == []
+    await _closed(resin_printer)
+    await adapter.async_teardown()
+
+
+async def _unclassified(printer: FakeResinPrinter, session: aiohttp.ClientSession) -> sdcp.SdcpProtocol:
+    """Return an adapter set up by a printer that said nothing of itself during the greet."""
+    printer.withhold_attributes = True
+    printer.withhold_status = True
+    adapter = _adapter(printer, session)
+    await adapter.async_setup()
+    assert printer.sent_commands == [1, 0]
+    return adapter
+
+
+async def test_late_attributes_stop_the_next_command(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.2)
+    adapter = await _unclassified(resin_printer, session)
+    await resin_printer.push("attributes")
+    await _until(lambda: adapter.attributes)
+    with pytest.raises(WrongPrinterError, match="Saturn 4 Ultra 16K"):
+        await adapter.set_printer_params({"LightStatus": {"SecondLight": 1}})
+    assert resin_printer.sent_commands == [1, 0]
+    assert resin_printer.forbidden == []
+    await _closed(resin_printer)
+    await adapter.async_teardown()
+
+
+async def test_a_late_status_stops_the_next_read(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.2)
+    adapter = await _unclassified(resin_printer, session)
+    await resin_printer.push("status")
+    await _until(lambda: adapter._status)  # noqa: SLF001
+    with pytest.raises(WrongPrinterError):
+        await adapter.async_read()
+    assert adapter._ws is None  # noqa: SLF001
+    assert resin_printer.sent_commands == [1, 0]
+    await _closed(resin_printer)
+    await adapter.async_teardown()
+
+
+async def test_the_fake_crashes_on_the_timelapse_switch(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """Command 387 is a setting that outlives the print, so no resin adapter may send it."""
+    async with session.ws_connect(f"{resin_printer.url}/websocket") as ws:
+        await ws.send_str(sdcp.build_frame(resin_printer.mainboard, 387, {"Enable": 1})[1])
+        await _until(lambda: resin_printer.crashed)
+    assert resin_printer.forbidden == [387]
+
+
 # ---------------------------------------------------------------- the entry
 
 
