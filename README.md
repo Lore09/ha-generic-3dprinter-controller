@@ -1,3 +1,5 @@
+<img src="custom_components/generic_3dprinter/brand/icon.png" alt="" width="96" align="right">
+
 # Generic 3D Printer Controller
 
 One Home Assistant integration for a **mixed 3D printer fleet**. Each printer is a
@@ -132,9 +134,9 @@ multi-material unit with auto-feed. The camera is a video stream Home Assistant
 plays. Files can be listed and printed, but not uploaded yet.
 
 **The Kobra X has been checked on a real printer**, firmware 2.0.1.9: status, the
-colour changer, files, the camera, the light, temperatures, the fan, home and jog.
-Starting, pausing and stopping a print, the speed and auto-feed are not measured
-yet. The other Kobras are built from the published work of other projects, listed
+colour changer, files, the camera, the light, a nozzle target, the part fan, homing
+X and Y and a jog of X. Starting, pausing and stopping a print, the speed,
+auto-feed, homing Z or all axes and jogging Y or Z are not measured yet. The other Kobras are built from the published work of other projects, listed
 in `docs/protocol-anycubic-kobra.md`, and the card marks them as unverified.
 `tools/acceptance_kobra.py` checks a printer.
 
@@ -457,10 +459,12 @@ component. Entity names come from there, not from `strings.json`.
   for 200 seconds. Its commands, the upload and the camera follow the SDCP V3
   specification and another project's work on the same printer, and were not sent;
   `docs/protocol-elegoo-sdcp-resin.md` says which.
-* The **Anycubic Kobra** adapter has not been run against a printer yet. It follows
-  a capture from a Kobra S1 Max, users' diagnostics from a Kobra X, and a Kobra X
-  owner's own integration. `docs/protocol-anycubic-kobra.md` says which source each
-  command comes from, and `tools/acceptance_kobra.py` checks a printer.
+* The **Anycubic Kobra X** was checked on firmware 2.0.1.9, except printing, the
+  speed, auto-feed, homing Z or all axes and jogging Y or Z. The other Kobras follow
+  a capture from a Kobra S1 Max, users' diagnostics and a Kobra X owner's own
+  integration, and are marked unverified. `docs/protocol-anycubic-kobra.md` says
+  which source each command comes from, and `tools/acceptance_kobra.py` checks a
+  printer.
 
 ## Documentation
 

@@ -110,6 +110,23 @@ async def test_a_command_before_the_first_read_is_judged_on_a_fresh_read(stub: S
     assert stub.last_snapshot is not None
 
 
+async def test_a_print_started_since_the_last_read_blocks_a_move(stub: StubProtocol) -> None:
+    """The last read may be a poll old; a move must not reach a printer that started since."""
+    await stub.async_read()
+    stub.state = PrintState.PRINTING
+    with pytest.raises(CommandBlockedError, match="busy"):
+        await stub.async_send(Command.JOG, axis="X", distance=10)
+    assert stub.sent == []
+
+
+async def test_a_command_no_rule_covers_needs_no_fresh_read(stub: StubProtocol) -> None:
+    await stub.async_read()
+    stub.state = PrintState.PRINTING
+    reads = stub.last_snapshot
+    await stub.async_send(Command.PAUSE)
+    assert stub.sent == [Command.PAUSE] and stub.last_snapshot is reads
+
+
 def test_not_idle() -> None:
     idle = PrinterSnapshot(protocol=ProtocolId.WEB_ONLY, connected=True, print_state=PrintState.IDLE)
     busy = PrinterSnapshot(protocol=ProtocolId.WEB_ONLY, connected=True, print_state=PrintState.PREPARING)
