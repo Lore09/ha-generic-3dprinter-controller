@@ -554,11 +554,7 @@ class AnycubicKobraProtocol(Protocol):
 
     async def async_setup(self) -> None:
         """Run the handshake, connect over TLS and ask for every report once.
-
-        One setup at a time. Two at once would each run the handshake and connect,
-        and the first connection would be left open, still folding reports in,
-        behind the second.
-        """
+        One at a time: two at once would each connect, and the first would stay open."""
         async with self._setup_lock:
             if self._connected:
                 return
@@ -648,10 +644,7 @@ class AnycubicKobraProtocol(Protocol):
 
     async def async_teardown(self) -> None:
         """Stop the camera if this session started it, and close the session.
-
-        A setup in flight is waited for, or its connection would open after the
-        close and outlive the entry.
-        """
+        Waits for a setup in flight, whose connection would otherwise outlive the entry."""
         async with self._setup_lock:
             if self._capturing and self._connected:
                 with suppress(ProtocolError, MqttError):

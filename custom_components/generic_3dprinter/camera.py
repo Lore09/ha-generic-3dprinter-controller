@@ -39,13 +39,7 @@ async def async_still_from_stream(
 
 async def async_require_ffmpeg(hass: HomeAssistant, name: str) -> None:
     """Set up Home Assistant's ffmpeg, which a stream camera's stills come from.
-
-    ``after_dependencies`` only orders this integration after an ffmpeg the user
-    configured. Neither ``default_config`` nor the camera and stream components set
-    it up, so on an install where no other integration needs it every still, and
-    every timelapse frame, would fail. Playback does not need it, so a failure is
-    logged and the camera is still added.
-    """
+    ``after_dependencies`` never loads it, and nothing in ``default_config`` does."""
     if not await async_setup_component(hass, "ffmpeg", {}):
         _LOGGER.warning(
             "%s: Home Assistant's ffmpeg integration could not be set up, so this "

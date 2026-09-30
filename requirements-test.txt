@@ -1,7 +1,6 @@
 # The Python test suite. The pin brings in the Home Assistant release it is built
 # against (2025.1.4), which is the last one that runs on Python 3.12.
 pytest-homeassistant-custom-component==0.13.205
-# Home Assistant's ffmpeg integration, which a stream camera's stills come from.
-# It is installed with that integration, not with Home Assistant, so the tests
-# that import it need it named. The version is the one 2025.1.4 requires.
+# The ffmpeg integration's library, which the stream-camera still test imports;
+# the version 2025.1.4 requires.
 ha-ffmpeg==3.2.2
