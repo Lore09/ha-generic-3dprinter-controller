@@ -5,7 +5,8 @@ config entry, each protocol is an adapter, and everything a user sees reads one
 shared model, so the dashboard, the entities and the automations never learn which
 protocol a printer speaks.
 
-Covers the **Elegoo Centauri Carbon** (SDCP) and **Centauri Carbon 2** (MQTT), the
+Covers the **Elegoo Centauri Carbon** (SDCP) and **Centauri Carbon 2** (MQTT),
+Elegoo's SDCP V3 resin printers such as the **Saturn 4 Ultra 16K**, the
 **Anycubic Kobra 3, 4, S1 and X** (LAN mode), **Klipper via Moonraker**,
 **OctoPrint**, **Duet / RepRapFirmware**, and any printer
 whose only interface is its own embedded web page. Adding a protocol is one module
@@ -31,7 +32,8 @@ pause button rather than a button that fails when pressed.
 **Sensors.** Printer state, progress, current and total layer, time remaining,
 time elapsed, file name, nozzle / bed / chamber temperature and target, fan duty,
 speed and flow factor, and diagnostics for protocol, model, firmware, serial and
-address.
+address. A resin printer has no nozzle or bed; it gets its print phase, UV LED
+temperature, vat temperature and target, and release film lifts instead.
 
 **Controls.** Pause, resume, stop and home buttons; target temperatures, speed
 factor, flow factor and fan duty as numbers; the chamber light as a switch. Each
@@ -87,6 +89,7 @@ different protocols.
 | --- | --- | --- |
 | Elegoo Centauri Carbon (SDCP) | 3030, camera 3031 | none on the LAN |
 | Elegoo Centauri Carbon 2 (MQTT) | 1883, camera 8080 | access code, if one is set |
+| Elegoo resin (Saturn, Mars), SDCP | 3030, camera RTSP 554 | none; the mainboard id is read from the printer |
 | Anycubic Kobra (LAN mode) | 18910, broker 9883, camera 18088 | none: the printer hands them out |
 | Klipper via Moonraker | 7125 | API key, if Moonraker requires one |
 | OctoPrint | 5000 or 80 | API key |
@@ -135,7 +138,42 @@ yet. The other Kobras are built from the published work of other projects, liste
 in `docs/protocol-anycubic-kobra.md`, and the card marks them as unverified.
 `tools/acceptance_kobra.py` checks a printer.
 
-### The one dangerous setting
+### Elegoo resin printers
+
+Elegoo's resin printers that speak SDCP V3, such as the Saturn 4 Ultra 16K, have
+their own entry in the protocol menu, **Elegoo resin (Saturn, Mars) – SDCP**. Add
+one by its address: the integration asks it for its mainboard id, which every
+request is addressed to, and fills the serial number with it. If the printer does
+not answer that question, type the mainboard id in the serial number field.
+
+You get the printer's state and the phase of each layer, such as exposing or
+lifting, the layer, progress and time left, the UV LED's temperature, the vat's
+temperature and the target the printer keeps, the release film's lifts against the
+count it is rated for, any failing device check or print error, and the files in its
+internal storage. Pause, resume and stop, file delete, and upload of `.ctb` and
+`.goo` files, the types the printer names, come on top. There are no temperatures,
+fans, light or motion to set: none of them is a command a resin printer takes.
+
+Starting a print and the camera are each an opt-in, off by default (see below).
+
+**The Saturn 4 Ultra 16K has been read on a real printer**, firmware V1.5.6, while
+idle: its status, attributes, files and history. Pause, resume, stop, delete,
+upload, start and the camera follow the SDCP V3 specification and another project's
+work on the same model and firmware, and have not been sent to a printer by this
+project yet. The Saturn 4 Ultra and the Mars 5 Ultra are marked unverified.
+`docs/protocol-elegoo-sdcp-resin.md` has every measurement and source, and
+`tools/acceptance_sdcp_resin.py` checks a printer read-only.
+
+The Saturn 3 Ultra and the Mars 4 Ultra speak an older SDCP over MQTT, are **not
+supported**, and are refused when you add them.
+
+A resin printer and a Centauri Carbon answer on the same port. An Elegoo Centauri
+Carbon entry that finds a resin printer at its address stops with an error saying so
+before it sends any Centauri command; remove it and add the printer as an Elegoo resin
+printer. A resin entry that finds an FDM printer, or another resin printer than its
+own, stops the same way.
+
+### The dangerous settings
 
 On Elegoo SDCP, **starting a print over the network** is off by default and is
 asked as an explicit opt-in when you add the printer. Read the reason before you
@@ -161,6 +199,21 @@ printer reports itself idle.
 
 An Anycubic Kobra has the same opt-in: its start request is documented only for the
 Kobra 3 through custom firmware.
+
+An Elegoo resin printer has two opt-ins, both off by default:
+
+* **Allow starting a print over the network.** A resin print lowers the platform
+  into the vat and exposes the resin with nobody at the printer, and nothing on the
+  network can tell whether the vat has resin in it and the vat and platform are
+  clean. The integration sends only the two fields the SDCP V3 specification gives,
+  and only when the printer says it is idle. The card asks you to confirm the vat
+  and the platform first.
+* **Allow the camera.** The camera is an RTSP stream with room for two viewers, and
+  a viewer that is not closed cleanly keeps its place until the printer is switched
+  off and on. The integration opens it only while both places are free, at most once
+  every 10 seconds and not in a print's first three layers, and closes it
+  gracefully, but freeing a stuck place may still need a power cycle. Close
+  Elegoo's slicer and app while the camera is in use.
 
 ## The card
 
@@ -248,6 +301,11 @@ The card draws a control only when the printer reports the capability for it, so
 printer that cannot start a print shows no print button, a printer that cannot jog
 shows no joystick, and a printer with no camera shows no camera pane.
 
+A resin printer shows its vat, with the target the printer keeps, and its UV LED
+where the nozzle and the bed would be, a row with the release film's lifts and a chip
+for each failing device check, and its phase after the state, such as "Printing ·
+Exposing". Its file picker offers only the types the printer prints.
+
 ## Timelapse
 
 A printer with a camera gets a **Timelapse** switch, off until you turn it on. While
@@ -269,6 +327,9 @@ on before its first frame and off again once the video is made, and a light that
 was already on is left alone. Without it the light stays as you set it; a Kobra X
 keeps its light off when the camera starts and streams with it off, so a print at
 night in a dark room makes a dark timelapse.
+
+A resin printer gets the Timelapse switch once its camera is allowed, and no
+Timelapse light switch: it has no light to switch.
 
 ```yaml
 automation:
@@ -362,6 +423,15 @@ on. The integration now does what the page does: it pings, it asks for the statu
 every connection and whenever the last one is more than 20 seconds old, and it
 switches the camera on with command 386 before reading it.
 
+**A Centauri Carbon entry stops with "answers as ..., a resin printer".** A resin
+printer now answers at that address. The entry stops rather than drive it; remove it
+and add the printer as an Elegoo resin printer.
+
+**A resin printer's camera will not open.** It opens only while the printer reports
+both of its two video places free. Close Elegoo's slicer and app. If the printer
+still counts a viewer after they are closed, a viewer was not closed cleanly, and
+only switching the printer off and on frees its place.
+
 **Entity names look generic.** Confirm `translations/en.json` shipped with the
 component. Entity names come from there, not from `strings.json`.
 
@@ -382,6 +452,11 @@ component. Entity names come from there, not from `strings.json`.
   The speed mode can only be changed during a print: an idle printer refuses it.
   `docs/protocol-elegoo-cc2.md` has every measurement, and `tools/acceptance_cc2.py`
   checks a printer read-only.
+* The **Elegoo resin** adapter was read on a live Saturn 4 Ultra 16K on firmware
+  `V1.5.6` while idle: the status, attributes, files and history, and a socket held
+  for 200 seconds. Its commands, the upload and the camera follow the SDCP V3
+  specification and another project's work on the same printer, and were not sent;
+  `docs/protocol-elegoo-sdcp-resin.md` says which.
 * The **Anycubic Kobra** adapter has not been run against a printer yet. It follows
   a capture from a Kobra S1 Max, users' diagnostics from a Kobra X, and a Kobra X
   owner's own integration. `docs/protocol-anycubic-kobra.md` says which source each
@@ -392,7 +467,8 @@ component. Entity names come from there, not from `strings.json`.
 | Document | Contents |
 | --- | --- |
 | `docs/architecture.md` | Why the integration is shaped this way |
-| `docs/protocol-elegoo-sdcp-verified.md` | Every SDCP fact observed on real hardware |
+| `docs/protocol-elegoo-sdcp-verified.md` | Every SDCP fact observed on a Centauri Carbon |
+| `docs/protocol-elegoo-sdcp-resin.md` | Elegoo's SDCP V3 resin printers: what is measured and what is sourced |
 | `docs/protocol-elegoo-cc2.md` | The Centauri Carbon 2 protocol: what is measured and what is sourced |
 | `docs/protocol-anycubic-kobra.md` | The Anycubic Kobra protocol, every command with its source |
 | `docs/protocol-adapter-layer-design.md` | The adapter interface and its types |
@@ -413,12 +489,14 @@ npm install && npm test        # the card tests, Node 22.12 or newer
 Home Assistant release the suite runs against.
 
 `tools/` holds the instruments used to work on the SDCP protocol and to prove the
-integration against real hardware:
+integration against real hardware. The Centauri Carbon's SDCP tools stop when the
+address answers as a resin printer:
 
 | Tool | Purpose |
 | --- | --- |
 | `tools/acceptance_sdcp.py` | Drive the real adapter against a real printer, 21 checks |
 | `tools/acceptance_cc2.py` | The same for a Centauri Carbon 2, read-only |
+| `tools/acceptance_sdcp_resin.py` | The same for an Elegoo resin printer, read-only |
 | `tools/acceptance_kobra.py` | The same for an Anycubic Kobra, read-only unless `--active` |
 | `tools/acceptance_camera.py` | Measure a printer's camera: frames, distinct frames, frame rate |
 | `tools/probe_sdcp.py` | Dump every raw SDCP frame a printer sends |

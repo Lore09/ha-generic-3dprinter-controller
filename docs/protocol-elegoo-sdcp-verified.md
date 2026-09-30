@@ -4,12 +4,20 @@ Every fact in this document was observed by this repository's own tools against 
 live printer on the LAN, or is marked as coming from another source. The probe
 transcript is reproducible with `tools/probe_sdcp.py`.
 
+**These facts are historical.** The Centauri Carbon below has since been sold, so
+nothing here can be measured again on it. Its address, `192.168.128.143`, now
+belongs to an Elegoo Saturn 4 Ultra 16K, a resin printer that speaks SDCP V3 on the
+same port and must never get a Centauri command; it is documented in
+`protocol-elegoo-sdcp-resin.md`. Point `tools/probe_sdcp.py` and the other Centauri
+tools at another Centauri Carbon: at a resin printer they stop before any command
+only a Centauri takes.
+
 Device under test:
 
 | Property | Value |
 | --- | --- |
 | Model | Elegoo Centauri Carbon |
-| LAN address | `192.168.128.143` |
+| LAN address | `192.168.128.143` at the time; now the Saturn 4 Ultra 16K's |
 | Firmware | `V1.4.49` |
 | SDCP protocol version | `V3.0.0` |
 | MainboardID | `5c441dd30105041800009c0000000000` |

@@ -63,6 +63,10 @@ Consequences that follow, and that the card must respect:
 * Fan speeds are normalised to **0 to 100 percent**. Bambu reports 0 to 15.
 * Print state is a closed enum, because every protocol has a different string for
   "paused" and the card must not learn eight vocabularies.
+* A resin printer keeps that enum. What it adds, such as the phase of a layer
+  (exposing, lifting), the UV LED, the vat and the release film, lives in an
+  optional `snapshot.resin`, `None` for every other printer, so an FDM snapshot is
+  the same document with one empty key.
 
 ## Capabilities are data
 
@@ -74,7 +78,7 @@ than a button that fails when pressed. The card reads the same set, so a printer
 with no camera shows no camera pane and a printer that cannot pause shows no
 pause button.
 
-Three refinements keep that rule true on real hardware.
+Four refinements keep that rule true on real hardware.
 
 **Model profiles.** One protocol can serve several models that differ in what
 they have: the Anycubic Kobra line speaks one protocol, and only some of its
@@ -98,7 +102,18 @@ rule: no motion, start or filament change while a job is running.
 **Camera kinds.** `CAMERA` is a JPEG camera the integration relays through one
 shared upstream connection. `CAMERA_STREAM` is a native video stream: the adapter
 returns its URL from `async_stream_source()`, Home Assistant's stream component
-plays it, and the card embeds Home Assistant's own camera card for it.
+plays it, and the card embeds Home Assistant's own camera card for it. A camera
+that Home Assistant's stream component cannot play safely, such as a Saturn's
+RTSP over UDP with two sessions that leak when a client is killed, stays a
+`CAMERA`: its adapter turns it into JPEG frames with one ffmpeg it stops
+gracefully, and the camera platform hands the adapter Home Assistant's ffmpeg,
+since an adapter imports nothing of Home Assistant.
+
+**Readings that are not an FDM printer's.** `RESIN_STATUS` brings a resin
+printer's phase, UV LED and release film sensors and its layer counters, and it
+also means "no nozzle, no bed", so their sensors are not created. `VAT_SENSOR`
+brings the vat's temperature and target as readings, since no command sets them.
+Both are read-only: like `CHAMBER_SENSOR`, they grant no command.
 
 ## Finding printers
 
@@ -110,6 +125,12 @@ on a web page (each registration's `http_markers`), which outranks an open port
 (its `ports`). A result carries `prefill`, the configuration the printer gave
 about itself, such as its serial number. The config flow offers every printer
 found and not yet configured.
+
+Two protocols can share a discovery literal and a port: a Centauri Carbon and a
+Saturn both answer SDCP's `M99999` on UDP 3000 and speak on 3030. Each adapter
+passes an `accept` filter to the shared probe and keeps only its own kind, decided
+by `classify_sdcp` from what the printer says of itself, so one reply is never
+offered under both.
 
 ## Holding adapters to one contract
 
@@ -134,6 +155,15 @@ in its verified table. Codes the printer's own firmware documents but that no
 source has verified on real hardware are gated behind an explicit per-printer
 opt-in that defaults to off, and the config flow states the risk where the user
 turns it on. Nothing in this integration ever probes an unknown code.
+
+Where two kinds of printer share a wire, the allowlist is the class structure, not
+an override. `SdcpSession` holds the SDCP socket and can send only the status, the
+attributes and the file list; the Centauri's adapter adds its setters and CANVAS on
+top of it, and the resin adapter adds only the commands the V3 spec gives a resin
+printer. Each checks, after command 1 and after every read, that the printer is
+its kind; if not, it closes the socket before it raises `WrongPrinterError`, which
+stops the entry instead of retrying it, and no request goes out on a socket whose
+printer was not checked.
 
 ## Reverse proxy, for printers with no API
 
@@ -171,8 +201,9 @@ never share mutable state and never need serialising against each other.
   out of scope, and Bambu's firmware-side developer-mode gate is reported as a
   state rather than retried.
 * No protocol is claimed to work that was not probed. The Centauri Carbon was
-  probed live. Moonraker, OctoPrint and Duet are built from the documented
-  and cited API surface, and their adapters say so.
+  probed live, and a Saturn 4 Ultra 16K was read live. Moonraker, OctoPrint and
+  Duet are built from the documented and cited API surface, and their adapters say
+  so.
 * No generic "unknown printer" auto-detection beyond a port probe that tells the
   user what it found and asks them to confirm. Guessing a protocol and then
   sending it a command is how printers get bricked.

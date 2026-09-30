@@ -4,6 +4,22 @@
 
 **Added**
 
+* **Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K**, as their
+  own protocol, added with their address alone. The printer's state and the phase
+  of each layer, layers, progress and time left, the UV LED, the vat and the target
+  the printer keeps, the release film's lifts against its rating, failing device
+  checks and print errors, and its files; pause, resume, stop, delete, and upload of
+  the `.ctb` and `.goo` files the printer names. Starting a print and the camera are
+  each an opt-in: the camera opens only while both of the printer's two RTSP
+  sessions are free and is closed gracefully, since a session a killed client
+  leaves behind needs a power cycle. No nozzle, bed, fan, light or motion control
+  appears. The card shows the vat, the UV LED, the film and the phase, such as
+  "Printing · Exposing". The 16K was read on a printer, firmware V1.5.6, while
+  idle; its commands, the upload and the camera follow the SDCP V3 specification
+  and are not measured yet. The Saturn 4 Ultra and Mars 5 Ultra are marked
+  unverified, and the Saturn 3 Ultra and Mars 4 Ultra, which speak SDCP over MQTT,
+  are refused. `tools/acceptance_sdcp_resin.py` checks one read-only, and
+  `docs/protocol-elegoo-sdcp-resin.md` says what is measured and what is sourced.
 * **A timelapse of every print**, for any printer with a camera. A Timelapse switch
   records a frame per layer, or every 30 seconds without layers, and turns them into
   an MP4 in the media folder when the job ends, with a `generic_3dprinter_timelapse`
@@ -37,11 +53,21 @@
 
 **Fixed**
 
+* **A Centauri Carbon entry no longer drives a resin printer at its address.** Both
+  speak SDCP on the same port, and the entry would have sent a Saturn the Centauri's
+  temperature, fan and light command, which a resin printer does not have. It now
+  stops with an error saying what answered, before any such command, and discovery
+  and the config flow no longer offer a resin printer as a Centauri Carbon.
+* An entry whose printer left a request unanswered during setup, such as an SDCP
+  command 1, failed for good; it now retries.
 * A second connection attempt to a Centauri Carbon that was already connected
   opened a second socket and kept one of the printer's five client slots until the
   printer timed it out.
 * `tools/acceptance_cc2.py` failed to start, and `tools/acceptance_sdcp.py` crashed
   on an unreachable printer.
+* `tools/probe_sdcp.py`, `tools/acceptance_sdcp.py`, `tools/acceptance_camera.py`
+  and `tools/verify_sdcp.py` stop when the address answers as a resin printer,
+  rather than send it the Centauri's commands.
 
 **Removed**
 
@@ -51,6 +77,8 @@
 
 * `requirements-test.txt` pins the test harness. The card tests need Node 22.12.
 * Every adapter runs one shared contract suite against its fake printer.
+* A fake Saturn built only from frames the real one sent, which records any command
+  a resin printer must never get.
 
 ## 0.5.1
 
