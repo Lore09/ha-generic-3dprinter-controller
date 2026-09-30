@@ -423,8 +423,9 @@ clients. If a slicer and a browser already hold them, the printer refuses the
 handshake with HTTP 500 and the integration says so explicitly.
 
 **The Centauri Carbon 2 will not connect.** Check that the printer is in LAN-only
-mode (see above): in cloud mode it takes the connection and never answers, and the
-integration says so. A refused access code is reported as such. "No free client
+mode (see above): in cloud mode it takes the connection and never answers. Adding
+it is refused with that instruction; a printer already added is shown unreachable
+with the same hint, and retried until LAN-only mode is back. A refused access code is reported as such. "No free client
 slot" means the slicer, the phone app and other clients hold them all.
 
 **A Centauri Carbon stops answering after a power cycle until its web page is

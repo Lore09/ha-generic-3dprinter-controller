@@ -200,8 +200,9 @@ never share mutable state and never need serialising against each other.
 ## What this deliberately does not do
 
 * No cloud. Every adapter is LAN-only. A printer that needs an account to work is
-  out of scope, and a Centauri Carbon 2 in cloud mode is refused at setup with a
-  message saying so rather than retried.
+  out of scope. A Centauri Carbon 2 in cloud mode is refused when it is added,
+  with a message saying so. One already set up that is switched to cloud mode is
+  reported unreachable with the same hint, and Home Assistant keeps retrying it.
 * No protocol is claimed to work that was not probed. The Centauri Carbon was
   probed live, and a Saturn 4 Ultra 16K was read live. Moonraker, OctoPrint and
   Duet are built from the documented and cited API surface, and their adapters say
