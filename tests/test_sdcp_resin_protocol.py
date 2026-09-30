@@ -195,9 +195,9 @@ def test_an_empty_status_is_unknown() -> None:
 # ---------------------------------------------------------- what it can send
 
 
-def test_it_can_send_only_reads_and_the_job_controls() -> None:
+def test_it_can_send_only_reads_the_job_controls_and_the_video_switch() -> None:
     codes = set(SdcpResinProtocol.commands.values())
-    assert codes == {0, 1, 258, 128, 129, 130, 131, 259}
+    assert codes == {0, 1, 258, 128, 129, 130, 131, 259, 386}
     assert not codes & {324, 387, 403}
     for name in ("set_printer_params", "_async_read_canvas", "camera_url", "web_ui_url", "_async_enable_video"):
         assert not hasattr(SdcpResinProtocol, name), name

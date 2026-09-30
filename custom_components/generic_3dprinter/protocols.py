@@ -389,6 +389,8 @@ class Protocol(ABC):
 
     #: State rules: extend the defaults, own rules first; the first that blocks gives the reason.
     block_rules: tuple[BlockRule, ...] = DEFAULT_BLOCK_RULES
+    #: The ffmpeg a camera that needs one runs; the camera platform sets Home Assistant's.
+    ffmpeg_binary: str | None = None
 
     def __init__(
         self,

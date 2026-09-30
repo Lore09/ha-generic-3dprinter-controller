@@ -125,6 +125,25 @@ _UNSAFE_SDCP_RESIN_START_PRINT: Final = UnsafeFeature(
     ),
 )
 
+_UNSAFE_SDCP_RESIN_CAMERA: Final = UnsafeFeature(
+    id="sdcp_resin_camera",
+    label="Allow the camera",
+    reason=(
+        "The camera is an RTSP stream with room for two viewers, and a viewer that is not "
+        "closed cleanly keeps its place until the printer is switched off and on. This "
+        "integration opens it only while both places are free, at most once every 10 seconds "
+        "and not in a print's first layers, and closes it gracefully, but it has not yet "
+        "opened the camera on a resin printer. Enable this only if you accept that freeing "
+        "the camera may need a power cycle."
+    ),
+    gates=frozenset({Capability.CAMERA}),
+    evidence=(
+        "command 386 and its VideoUrl from the SDCP V3 spec (en.md:883-921); RTSP over UDP "
+        "only, from huygens server.py:964-1054; the session a killed client leaks, from "
+        "alfiedennen/sdcp-saturn-4-ultra camera-stream-leak.md; not measured by this project"
+    ),
+)
+
 #: What every Kobra of the signed-handshake generation can express.
 _KOBRA_BASE: Final = frozenset(
     {
@@ -181,11 +200,12 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
     ),
 )
 
-#: What every SDCP V3 resin printer has: its state, phase, UV LED and film, its files, their
-#: upload to port 3030, and start (opted in), pause, resume, stop and delete (spec en.md:370-535).
+#: What every SDCP V3 resin printer has: its state, phase, UV LED and film, its files, their upload
+#: to port 3030, start and the camera (opted in), pause, resume, stop and delete (spec en.md:370-921).
 _RESIN_BASE: Final = frozenset(
     {
         Capability.START_PRINT,
+        Capability.CAMERA,
         Capability.FILE_LIST,
         Capability.FILE_UPLOAD,
         Capability.RESIN_STATUS,
@@ -334,12 +354,12 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             id=ProtocolId.SDCP_RESIN,
             label="Elegoo resin (Saturn, Mars) – SDCP",
             adapter=_resolve(_ADAPTER_MODULES["sdcp_resin"], "SdcpResinProtocol"),  # type: ignore[arg-type]
-            # Start print is withheld by its opt-in; no camera until it is measured on a printer.
+            # Start print and the camera are each withheld by their own opt-in.
             capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
             models=SDCP_RESIN_MODELS,
             fields=("port", "serial"),
             ports=(3030,),
-            unsafe=(_UNSAFE_SDCP_RESIN_START_PRINT,),
+            unsafe=(_UNSAFE_SDCP_RESIN_START_PRINT, _UNSAFE_SDCP_RESIN_CAMERA),
             evidence={
                 "verified": (
                     "a Saturn 4 Ultra 16K on firmware V1.5.6 answered commands 0, 1, 258 "
@@ -358,12 +378,12 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "that project give, only while the machine is idle, and only the file "
                     "types the printer names in SupportFileType. Start print (128), behind "
                     "its opt-in, sends only Filename and StartLayer 0 for a file in /local, "
-                    "as the spec gives, once a fresh status says the machine is idle"
+                    "as the spec gives, once a fresh status says the machine is idle. The "
+                    "camera, behind its opt-in, sends 386 Enable 1 only while command 1 shows "
+                    "both video sessions free, reads the RTSP VideoUrl with ffmpeg over UDP, "
+                    "stops ffmpeg with q or SIGTERM so it sends TEARDOWN, then sends Enable 0"
                 ),
-                "absent": (
-                    "the camera, until it is measured on a printer; the vat's target, which "
-                    "no command sets"
-                ),
+                "absent": "the vat's target, which no command sets",
             },
         ),
         ProtocolId.ELEGOO_CC2: AdapterRegistration(

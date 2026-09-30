@@ -100,6 +100,7 @@ async def test_the_flow_learns_the_mainboard_id(hass: HomeAssistant, monkeypatch
         )
         assert result["step_id"] == "unsafe"
         assert "sdcp_resin_start_print" in str(result["data_schema"].schema)
+        assert "sdcp_resin_camera" in str(result["data_schema"].schema)
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY, result
     assert result["data"]["protocol"] == "sdcp_resin"
@@ -183,7 +184,7 @@ async def test_a_saturn_entry_has_only_resin_entities(
     }
     assert described["printer"]["resin"]["machine"] == "idle"
     assert "start_print" not in described["printer"]["capabilities"]
-    assert [item["id"] for item in described["unsafe_features"]] == ["sdcp_resin_start_print"]
+    assert [item["id"] for item in described["unsafe_features"]] == ["sdcp_resin_start_print", "sdcp_resin_camera"]
     assert described["printer"]["progress"] is None
     assert described["printer"]["filename"] == "SUP_allineatore_01_1_202609301434.goo"
 
@@ -271,7 +272,7 @@ async def test_an_opted_in_entry_starts_a_listed_file_with_two_fields(
     await websocket.send_json({"id": 1, "type": "generic_3dprinter/describe", "entry_id": entry.entry_id})
     described = (await websocket.receive_json())["result"]
     assert "start_print" in described["printer"]["capabilities"]
-    assert described["unsafe_features"] == []
+    assert [item["id"] for item in described["unsafe_features"]] == ["sdcp_resin_camera"]
 
     await websocket.send_json({"id": 2, "type": "generic_3dprinter/send", "entry_id": entry.entry_id,
                                "command": "start_print",
@@ -282,3 +283,36 @@ async def test_an_opted_in_entry_starts_a_listed_file_with_two_fields(
     assert resin_printer.forbidden == []
     assert not resin_printer.crashed
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_opted_in_entry_gets_a_camera_that_opens_nothing_on_setup(
+    hass: HomeAssistant, hass_ws_client: Any, resin_printer: FakeResinPrinter
+) -> None:
+    """The camera and its timelapse appear, never the timelapse light: a resin printer has none."""
+    from unittest.mock import AsyncMock
+
+    from custom_components.generic_3dprinter import camera as camera_module
+
+    entry = _entry(hass, resin_printer.port, SATURN, unsafe_enabled=["sdcp_resin_camera"])
+    with patch.object(camera_module, "async_setup_component", AsyncMock(return_value=True)) as setup,             patch.object(camera_module, "_ffmpeg_binary", return_value="/usr/bin/ha-ffmpeg"):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    setup.assert_awaited_once_with(hass, "ffmpeg", {})
+    assert entry.runtime_data.adapter.ffmpeg_binary == "/usr/bin/ha-ffmpeg"
+
+    registry = er.async_get(hass)
+    keys = {
+        item.unique_id.removeprefix(f"{entry.entry_id}_")
+        for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    assert keys == EXPECTED | {"camera", "timelapse"}
+    websocket = await hass_ws_client(hass)
+    await websocket.send_json({"id": 1, "type": "generic_3dprinter/describe", "entry_id": entry.entry_id})
+    described = (await websocket.receive_json())["result"]
+    assert described["camera_kind"] == "mjpeg"
+    assert described["printer"]["camera"] is True
+    assert [item["id"] for item in described["unsafe_features"]] == ["sdcp_resin_start_print"]
+    assert 386 not in resin_printer.sent_commands
+    assert resin_printer.forbidden == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert 386 not in resin_printer.sent_commands

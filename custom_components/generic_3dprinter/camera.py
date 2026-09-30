@@ -17,6 +17,7 @@ from .coordinator import PrinterCoordinator
 from .entity import async_device_info, async_require_coordinator
 from .protocols import ProtocolError
 from .runtime import PrinterRuntime
+from .timelapse import _ffmpeg_binary
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ async def async_setup_entry(
         coordinator = async_require_coordinator(hass, entry.entry_id)
         async_add_entities([Generic3DPrinterStreamCamera(coordinator)])
     elif runtime.has_camera:
+        if getattr(runtime.adapter, "ffmpeg_binary", None) is not None:
+            # An adapter imports nothing of Home Assistant, so it is handed HA's ffmpeg.
+            await async_require_ffmpeg(hass, runtime.config.name)
+            runtime.adapter.ffmpeg_binary = _ffmpeg_binary(hass)
         coordinator = async_require_coordinator(hass, entry.entry_id)
         async_add_entities([Generic3DPrinterCamera(coordinator)])
 

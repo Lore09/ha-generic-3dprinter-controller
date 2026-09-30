@@ -26,6 +26,7 @@ PAYLOAD_KEYS: dict[int, frozenset[str]] = {
     130: frozenset(),
     131: frozenset(),
     259: frozenset({"FileList", "FolderList"}),
+    386: frozenset({"Enable"}),
 }
 
 #: A 16K mid-print, reported in elegoo-homeassistant issue #21 (TaskId shortened there).
@@ -98,6 +99,8 @@ class FakeResinPrinter:
         #: RTSP sessions open, as the attributes count them, and every 386 ``Enable`` sent.
         self.video_streams = 0
         self.video_enables: list[Any] = []
+        #: The ``VideoUrl`` 386 answers with, as the printer names itself; ``None`` leaves it out.
+        self.video_url: str | None = "rtsp://192.168.1.50:554/video"
         #: Every upload chunk's form fields, with ``File`` as bytes and its ``filename``.
         self.uploads: list[dict[str, Any]] = []
         #: The ``code`` an upload chunk is answered with; ``None`` answers with a bare page.
@@ -240,9 +243,10 @@ class FakeResinPrinter:
             self.video_enables.append(data.get("Enable"))
             if data.get("Enable") and self.video_streams >= self.attributes["MaximumVideoStreamAllowed"]:
                 await ws.send_str(self._response(cmd, request_id, {"Ack": 1}))
+            elif data.get("Enable") and self.video_url is not None and not self.acks.get(cmd):
+                await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "VideoUrl": self.video_url}))
             else:
-                url = "rtsp://127.0.0.1:554/video"
-                await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "VideoUrl": url}))
+                await ws.send_str(self._response(cmd, request_id, {"Ack": self.acks.get(cmd, 0)}))
         else:
             # 259 answers Ack 0 even for a path that does not exist, as reported.
             ack = self.acks.get(cmd, 0)

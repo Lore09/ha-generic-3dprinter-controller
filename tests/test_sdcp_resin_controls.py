@@ -138,7 +138,7 @@ async def test_start_print_is_refused_without_the_opt_in(
     with pytest.raises(UnsafeCommandError, match="exposes the resin"):
         await adapter.async_send(Command.START_PRINT, filename=CAPTURED_FILE)
     assert resin_printer.sent_commands == before == [1, 0]
-    assert [feature.id for feature in adapter.unsafe_features] == ["sdcp_resin_start_print"]
+    assert [feature.id for feature in adapter.unsafe_features] == ["sdcp_resin_start_print", "sdcp_resin_camera"]
     await adapter.async_teardown()
 
 

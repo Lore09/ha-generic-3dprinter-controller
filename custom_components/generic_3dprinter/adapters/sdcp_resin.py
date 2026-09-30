@@ -1,16 +1,18 @@
 """Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K. It shares the socket with
-the Centauri Carbon adapter, and sends only the reads, the job controls, delete and uploads."""
+the Centauri Carbon adapter, and sends only the reads, the job controls, files and the camera."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
-from contextlib import suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from types import MappingProxyType
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -25,10 +27,12 @@ from ..protocols import (
     ConfigError,
     PrinterConfig,
     ProtocolError,
+    UnreachableError,
     WrongPrinterError,
     valid_serial,
 )
 from . import sdcp
+from .rtsp_frames import RtspFrames, Spawn, async_spawn
 from .sdcp import (
     RESIN_FILE_TYPES,
     SDCP_DISCOVERY_PORT,
@@ -43,6 +47,8 @@ from .sdcp import (
     sdcp_identity,
     status_flags,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 #: The printer counts ``CurrentTicks`` and ``TotalTicks`` in milliseconds (spec en.md:149-150).
 TICKS_PER_SECOND: Final = 1000.0
@@ -95,9 +101,18 @@ RETAINED_JOB_STATUS: Final = frozenset({8, 9})
 #: The states in which the job's progress, times and layers mean the job in hand.
 JOB_STATES: Final = frozenset({PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED})
 
-#: The codes a resin printer is sent: the reads, then the job controls and delete (spec en.md:370-535).
+#: The codes a resin printer is sent: the reads, the job controls, delete and the video switch
+#: (spec en.md:370-535, 883-921); never 387, 403 or the Centauri's 324.
 RESIN_COMMAND: Final[Mapping[str, int]] = MappingProxyType(
-    {**SESSION_COMMAND, "start_print": 128, "pause": 129, "stop": 130, "resume": 131, "delete_files": 259}
+    {
+        **SESSION_COMMAND,
+        "start_print": 128,
+        "pause": 129,
+        "stop": 130,
+        "resume": 131,
+        "delete_files": 259,
+        "video": 386,
+    }
 )
 
 #: The job controls, each sent with an empty ``Data`` as the spec shows.
@@ -131,6 +146,11 @@ LOCAL_FOLDER: Final = "/local"
 
 #: The job types a Saturn 4 Ultra 16K names in ``SupportFileType``, until the attributes say.
 RESIN_SUFFIXES: Final = (".ctb", ".goo")
+
+#: Seconds between two camera opens, so a retry or a still cannot stack RTSP sessions.
+VIDEO_SPACING: Final = 10.0
+#: The camera is not opened before this layer: the first layers are the ones a hang would ruin.
+VIDEO_MIN_LAYER: Final = 3
 
 #: ``PrintInfo.ErrorNumber`` (spec en.md:206-218).
 PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
@@ -304,9 +324,11 @@ def _discovery_result(reply: Mapping[str, Any], sender: str) -> DiscoveryResult:
 
 class SdcpResinProtocol(SdcpSession):
     """An Elegoo resin printer on SDCP V3: it reads, starts (opted in), pauses, resumes and stops,
-    and uploads and deletes files."""
+    uploads and deletes files, and reads the camera (opted in)."""
 
     commands = RESIN_COMMAND
+    #: The ffmpeg the camera runs; the camera platform sets Home Assistant's own.
+    ffmpeg_binary: str | None = "ffmpeg"
     command_ack_messages = RESIN_ACK_MESSAGES
     #: Only the spec's reply counts, so a page on the port is never read as a stored file.
     upload_reply_required = True
@@ -328,6 +350,15 @@ class SdcpResinProtocol(SdcpSession):
         """Create the adapter for one printer."""
         super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._attributes_at: float | None = None
+        #: Starts ffmpeg; a test hands in a fake.
+        self.spawn_ffmpeg: Spawn = async_spawn
+        #: Held from the camera's open to its release; a second open is refused, not queued.
+        self._video_lock = asyncio.Lock()
+        self._video_reader: RtspFrames | None = None
+        self._video_release: asyncio.Task[None] | None = None
+        #: Whether 386 ``Enable: 1`` went out with no ``Enable: 0`` after it.
+        self._video_on = False
+        self._video_opened_at: float | None = None
 
     # ------------------------------------------------------------ config flow
 
@@ -470,6 +501,7 @@ class SdcpResinProtocol(SdcpSession):
         if not self._status or stale:
             await self._async_refresh_status()
         await self._check_identity()
+        camera = _integer(self._attributes.get("CameraStatus")) == 1
 
         return PrinterSnapshot(
             protocol=ProtocolId.SDCP_RESIN,
@@ -479,6 +511,7 @@ class SdcpResinProtocol(SdcpSession):
             model=str(self._attributes.get("MachineName") or "") or None,
             firmware=str(self._attributes.get("FirmwareVersion") or "") or None,
             serial=self._mainboard_id or self.config.serial or None,
+            camera=camera and Capability.CAMERA in self.capabilities,
         )
 
     # ---------------------------------------------------------------- commands
@@ -559,3 +592,100 @@ class SdcpResinProtocol(SdcpSession):
                 "the printer takes a file only while it is idle", reason="the printer is not idle"
             )
         return await super().async_upload_file(name, stream, size=size)
+
+    # ----------------------------------------------------------------- camera
+
+    async def async_camera_frame(self) -> bytes:
+        """Return one JPEG from the camera, opening it for that frame alone."""
+        async with self._async_video(still=True) as reader, aclosing(reader.async_frames()) as frames:
+            async for frame in frames:
+                return frame
+        raise UnreachableError("the camera ended before a whole frame arrived")
+
+    async def async_camera_stream(self) -> AsyncIterator[bytes]:
+        """Yield JPEG frames while the caller reads; the camera hub is the only caller."""
+        async with self._async_video(still=False) as reader, aclosing(reader.async_frames()) as frames:
+            async for frame in frames:
+                yield frame
+
+    @asynccontextmanager
+    async def _async_video(self, *, still: bool) -> AsyncIterator[RtspFrames]:
+        """Hold the camera from 386 to its release; refuse at once while it is held,
+        since each wait would end in another of the printer's two RTSP sessions."""
+        if Capability.CAMERA not in self.capabilities:
+            raise UnreachableError("the camera is off until it is allowed in the printer's options")
+        if self._video_lock.locked() or (self._video_release is not None and not self._video_release.done()):
+            raise UnreachableError("the camera is already open")
+        async with self._video_lock:
+            try:
+                url = await self._async_video_url()
+                binary = self.ffmpeg_binary or "ffmpeg"
+                self._video_reader = RtspFrames(binary, url, still=still, spawn=self.spawn_ffmpeg)
+                await self._video_reader.async_start()
+                yield self._video_reader
+            finally:
+                await self._async_release_video()
+
+    async def _async_video_url(self) -> str:
+        """Switch the video on and return its address, only when the printer is free for it:
+        a camera, both sessions free by a fresh command 1, not early in a print, not just opened."""
+        opened = self._video_opened_at
+        if opened is not None and time.monotonic() - opened < VIDEO_SPACING:
+            raise UnreachableError(f"the camera was opened less than {VIDEO_SPACING:g} s ago")
+        await self._async_refresh_attributes()
+        await self._async_refresh_status()
+        if not self._attributes_event.is_set() or not self._status_event.is_set():
+            raise UnreachableError("the printer did not say whether its camera is free")
+        if _integer(self._attributes.get("CameraStatus")) != 1:
+            raise UnreachableError("the printer reports no camera")
+        used = _integer(self._attributes.get("NumberOfVideoStreamConnected"))
+        if used != 0:
+            count = "an unknown number" if used is None else str(used)
+            raise UnreachableError(f"{count} of the printer's video streams are in use")
+        info = self._status.get("PrintInfo")
+        layer = _integer(info.get("CurrentLayer")) if isinstance(info, Mapping) else None
+        if 1 in status_flags(self._status.get("CurrentStatus")) and (layer or 0) < VIDEO_MIN_LAYER:
+            raise UnreachableError(f"the camera is not opened before layer {VIDEO_MIN_LAYER} of a print")
+
+        self._video_opened_at = time.monotonic()
+        self._video_on = True
+        response = await self._async_send_checked("video", {"Enable": 1})
+        reported = str((response or {}).get("VideoUrl") or "").strip()
+        parts = urlsplit(reported if "://" in reported else f"rtsp://{reported}")
+        if not reported or parts.scheme.lower() != "rtsp" or not parts.hostname:
+            raise UnreachableError("the printer switched its video on but gave no RTSP address")
+        # The printer names itself as it sees itself; the entry's address is the one that reaches it.
+        port = f":{parts.port}" if parts.port else ""
+        return parts._replace(netloc=f"{self.config.host}{port}").geturl()
+
+    async def _async_release_video(self, *, reconnect: bool = True) -> None:
+        """Stop ffmpeg, then send 386 ``Enable: 0``, and wait for both even when cancelled:
+        a release cut short leaves a session the printer keeps until a power cycle."""
+        task = self._video_release
+        if task is None or task.done():
+            task = self._video_release = asyncio.create_task(self._async_stop_video(reconnect=reconnect))
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _async_stop_video(self, *, reconnect: bool) -> None:
+        reader, self._video_reader = self._video_reader, None
+        if reader is not None:
+            await reader.async_stop()
+        if not self._video_on or not (reconnect or self._ready):
+            return
+        self._video_on = False
+        try:
+            await self._async_send_checked("video", {"Enable": 0})
+        except ProtocolError as err:
+            _LOGGER.debug("%s: the video was not switched off: %s", self.config.name, err)
+
+    async def async_teardown(self) -> None:
+        """Release the camera over the open socket, then close it. Idempotent."""
+        await self._async_release_video(reconnect=False)
+        await super().async_teardown()
