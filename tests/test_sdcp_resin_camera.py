@@ -520,3 +520,124 @@ async def test_teardown_while_a_viewer_waits_for_a_frame_still_switches_off_and_
     assert resin_printer.connections == 0
     assert await asyncio.wait_for(task, 5) == [JPEG]
     assert resin_printer.forbidden == []
+
+
+# ------------------------------------------------------ teardown during an open
+
+
+class GatedSpawner(Spawner):
+    """Holds each ffmpeg start until ``gate`` is set, as a slow process start would."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.gate = asyncio.Event()
+        self.starting = asyncio.Event()
+
+    async def __call__(self, *args: str) -> FakeFfmpeg:
+        self.starting.set()
+        await self.gate.wait()
+        return await super().__call__(*args)
+
+
+async def _until(check: Any) -> None:
+    for _ in range(200):
+        if check():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the condition never held")
+
+
+async def _closed_for_good(printer: FakeResinPrinter) -> None:
+    """Wait for the socket to close, then check that nothing opens another."""
+    await _until(lambda: printer.connections == 0)
+    await asyncio.sleep(0.3)
+    assert printer.connections == 0
+
+
+async def test_teardown_after_the_enable_starts_no_ffmpeg_and_switches_the_video_off(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """386 Enable 1 is on the wire when the entry unloads: ffmpeg never starts."""
+    spawner = Spawner(resin_printer)
+    adapter = _adapter(resin_printer, session, spawner)
+    await adapter.async_read()
+    resin_printer.answer_delay[386] = 0.2
+    still = asyncio.create_task(adapter.async_camera_frame())
+    # The printer has the request and holds its answer back.
+    await _until(lambda: 386 in resin_printer.sent_commands)
+    assert resin_printer.video_enables == []
+
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+
+    with pytest.raises(UnreachableError, match="closing"):
+        await still
+    assert spawner.processes == []
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
+    await _closed_for_good(resin_printer)
+    assert resin_printer.forbidden == []
+
+
+async def test_teardown_while_ffmpeg_starts_stops_it_before_the_video_goes_off(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    spawner = GatedSpawner(resin_printer, frames=())
+    adapter = _adapter(resin_printer, session, spawner)
+    still = asyncio.create_task(adapter.async_camera_frame())
+    await asyncio.wait_for(spawner.starting.wait(), 5)
+
+    teardown = asyncio.create_task(adapter.async_teardown())
+    await asyncio.sleep(0.05)
+    assert not teardown.done()  # it waits for the start in progress
+    spawner.gate.set()
+    await asyncio.wait_for(teardown, 5)
+
+    (process,) = spawner.processes
+    assert process.log == ["q"]
+    assert process.enables_at_exit == [1]
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
+    with pytest.raises(UnreachableError):
+        await asyncio.wait_for(still, 5)
+    await _closed_for_good(resin_printer)
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
+
+
+@pytest.mark.parametrize("gives_up", [False, True], ids=["in_time", "after_the_wait"])
+async def test_an_open_a_teardown_overtook_never_reconnects(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch,
+    gives_up: bool,
+) -> None:
+    """The open waits for the attributes when the entry unloads; it must not reopen the socket
+    to go on, even when it outlasts the teardown's wait."""
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.3)
+    if gives_up:
+        monkeypatch.setattr(sdcp_resin, "VIDEO_CLOSE_WAIT", 0.05)
+    spawner = Spawner(resin_printer)
+    adapter = _adapter(resin_printer, session, spawner)
+    await adapter.async_read()
+    resin_printer.withhold_attributes = True
+    sent = len(resin_printer.sent_commands)
+    still = asyncio.create_task(adapter.async_camera_frame())
+    await _until(lambda: resin_printer.sent_commands[sent:] == [1])
+
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+    assert still.done() is not gives_up
+    with pytest.raises(UnreachableError, match="closing"):
+        await asyncio.wait_for(still, 5)
+
+    await _closed_for_good(resin_printer)
+    assert resin_printer.sent_commands[sent:] == [1]
+    assert spawner.processes == []
+    assert 386 not in resin_printer.sent_commands
+
+
+async def test_a_still_asked_for_during_teardown_is_refused(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    spawner = Spawner(resin_printer)
+    adapter = _adapter(resin_printer, session, spawner)
+    adapter._closing = True  # noqa: SLF001
+    with pytest.raises(UnreachableError, match="closing"):
+        await adapter.async_camera_frame()
+    assert spawner.processes == []
+    adapter._closing = False  # noqa: SLF001
+    await adapter.async_teardown()

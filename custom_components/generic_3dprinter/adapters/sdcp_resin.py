@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing, asynccontextmanager, suppress
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -163,6 +163,8 @@ VIDEO_MIN_LAYER: Final = 3
 #: Seconds a still is handed out again instead of opening the camera, which costs an RTSP
 #: session: Home Assistant asks every 10 s while a dashboard shows it, the timelapse per layer.
 STILL_MAX_AGE: Final = 60.0
+#: Seconds teardown waits for a camera open in progress to give up before it closes anyway.
+VIDEO_CLOSE_WAIT: Final = 15.0
 
 #: ``PrintInfo.ErrorNumber`` (spec en.md:206-218).
 PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
@@ -174,6 +176,20 @@ PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
         5: "the print file was sliced for another printer model",
     }
 )
+
+
+@dataclass(slots=True)
+class _CameraUse:
+    """One camera open: teardown sets ``closing``; ``settled`` once ffmpeg runs or the open failed."""
+
+    closing: bool = False
+    settled: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+def _check_open(use: _CameraUse) -> None:
+    """Refuse to go on with a camera open that a teardown overtook."""
+    if use.closing:
+        raise UnreachableError("the printer's connection is closing")
 
 
 def build_resin_frame(
@@ -371,6 +387,9 @@ class SdcpResinProtocol(SdcpSession):
         #: Whether 386 ``Enable: 1`` went out with no ``Enable: 0`` after it.
         self._video_on = False
         self._video_opened_at: float | None = None
+        #: The camera use holding the lock, and whether a teardown is running.
+        self._video_use: _CameraUse | None = None
+        self._closing = False
         #: The last frame, from a still or the stream, and when it came.
         self._still: bytes | None = None
         self._still_at: float | None = None
@@ -680,26 +699,37 @@ class SdcpResinProtocol(SdcpSession):
         """Hold the camera from 386 to its release; refuse at once while it is held,
         since each wait would end in another of the printer's two RTSP sessions."""
         self._require_camera()
+        if self._closing:
+            raise UnreachableError("the printer's connection is closing")
         if self._video_lock.locked() or (self._video_release is not None and not self._video_release.done()):
             raise UnreachableError("the camera is already open")
         async with self._video_lock:
+            use = self._video_use = _CameraUse()
             try:
-                url = await self._async_video_url()
-                binary = self.ffmpeg_binary or "ffmpeg"
-                self._video_reader = RtspFrames(binary, url, still=still, spawn=self.spawn_ffmpeg)
-                await self._video_reader.async_start()
+                try:
+                    url = await self._async_video_url(use)
+                    _check_open(use)
+                    binary = self.ffmpeg_binary or "ffmpeg"
+                    self._video_reader = RtspFrames(binary, url, still=still, spawn=self.spawn_ffmpeg)
+                    await self._video_reader.async_start()
+                finally:
+                    use.settled.set()
                 yield self._video_reader
             finally:
-                await self._async_release_video()
+                # A use a teardown overtook never reconnects the socket to switch the video off.
+                await self._async_release_video(reconnect=not use.closing)
+                self._video_use = None
 
-    async def _async_video_url(self) -> str:
+    async def _async_video_url(self, use: _CameraUse) -> str:
         """Switch the video on and return its address, only when the printer is free for it:
         a camera, both sessions free by a fresh command 1, not early in a print, not just opened."""
         opened = self._video_opened_at
         if opened is not None and time.monotonic() - opened < VIDEO_SPACING:
             raise UnreachableError(f"the camera was opened less than {VIDEO_SPACING:g} s ago")
         await self._async_refresh_attributes()
+        _check_open(use)
         await self._async_refresh_status()
+        _check_open(use)
         if not self._attributes_event.is_set() or not self._status_event.is_set():
             raise UnreachableError("the printer did not say whether its camera is free")
         if _integer(self._attributes.get("CameraStatus")) != 1:
@@ -752,6 +782,16 @@ class SdcpResinProtocol(SdcpSession):
             _LOGGER.debug("%s: the video was not switched off: %s", self.config.name, err)
 
     async def async_teardown(self) -> None:
-        """Release the camera over the open socket, then close it. Idempotent."""
-        await self._async_release_video(reconnect=False)
-        await super().async_teardown()
+        """Let a camera open in progress give up, release the camera over the open socket,
+        then close it. Idempotent."""
+        self._closing = True
+        try:
+            use = self._video_use
+            if use is not None:
+                use.closing = True
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(use.settled.wait(), VIDEO_CLOSE_WAIT)
+            await self._async_release_video(reconnect=False)
+            await super().async_teardown()
+        finally:
+            self._closing = False
