@@ -115,6 +115,15 @@ def test_resin_state_for_every_row(
     assert resin_state_for(flags, status) == (state, phase)
 
 
+@pytest.mark.parametrize(("vat", "phase"), [(28, ResinPhase.PREHEATING), (30, ResinPhase.HOMING)])
+def test_a_job_warming_its_vat_is_preheating_not_homing(vat: float, phase: ResinPhase) -> None:
+    """Measured on a 16K V1.5.6: code 1 held for five minutes while the vat went from 28 to 30 °C."""
+    info = {**IDLE_STATUS["PrintInfo"], "Status": 1, "CurrentLayer": 0}
+    status = {**IDLE_STATUS, "CurrentStatus": [1], "TempOfTank": vat, "TempTargetTank": 30, "PrintInfo": info}
+    fields = parse_resin(status, ATTRIBUTES)
+    assert (fields["print_state"], fields["resin"].phase) == (PrintState.PREPARING, phase)
+
+
 @pytest.mark.parametrize(
     ("flags", "machine"),
     [((0,), "idle"), ((1,), "printing"), ((2,), "file_transferring"), ((3,), "exposure_test"),

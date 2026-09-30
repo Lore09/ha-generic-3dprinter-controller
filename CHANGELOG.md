@@ -15,7 +15,8 @@
   leaves behind needs a power cycle. No nozzle, bed, fan, light or motion control
   appears. The card shows the vat, the UV LED, the film and the phase, such as
   "Printing · Exposing". The 16K was checked on a printer, firmware V1.5.6: its
-  state, files and history, upload and delete, and the camera, whose video comes
+  state and phases through a real job, starting, pausing, resuming and stopping it,
+  files and history, upload and delete, and the camera, whose video comes
   over UDP, so Home Assistant has to be on the printer's network. An upload is
   reported only once the printer has kept the file, since it discards one it cannot
   print without saying so. The Saturn 4 Ultra and Mars 5 Ultra are marked

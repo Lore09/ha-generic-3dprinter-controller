@@ -113,15 +113,13 @@ _UNSAFE_SDCP_RESIN_START_PRINT: Final = UnsafeFeature(
     reason=(
         "Starting a print lowers the platform into the vat and exposes the resin with "
         "nobody at the printer. It needs resin in the vat and a clean vat and platform, "
-        "which nothing on the network can check. This project has not yet started a "
-        "print on a resin printer: the request follows the SDCP V3 spec. Enable this "
-        "only if you accept that a print can start while the printer is not ready."
+        "which nothing on the network can check. Enable this only if you accept that a "
+        "print can start while the printer is not ready."
     ),
     gates=frozenset({Capability.START_PRINT}),
     evidence=(
-        "command 128 with only Filename and StartLayer 0, from the SDCP V3 spec (en.md:370-390) "
-        "and cuprum; reported to start a print on a Saturn 4 Ultra 16K on V1.5.6 by "
-        "alfiedennen/sdcp-saturn-4-ultra, and not measured by this project"
+        "command 128 with only Filename and StartLayer 0, from the SDCP V3 spec (en.md:370-390); "
+        "measured: it started a print of a file in /local on a Saturn 4 Ultra 16K, V1.5.6"
     ),
 )
 
@@ -226,8 +224,9 @@ SDCP_RESIN_MODELS: Final[tuple[ModelProfile, ...]] = (
         capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
         verified=True,
         evidence=(
-            "read on a Saturn 4 Ultra 16K, firmware V1.5.6: commands 0, 1, 258 and 320, "
-            "kept in tests/fixtures/sdcp_saturn4u16k_v156_idle.json"
+            "checked on a Saturn 4 Ultra 16K, firmware V1.5.6: reads (fixture in "
+            "tests/fixtures/sdcp_saturn4u16k_v156_idle.json), a job started, paused, "
+            "resumed and stopped, upload, delete and the camera"
         ),
     ),
     ModelProfile(
@@ -371,17 +370,14 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "An upload of a real .goo to port 3030 was kept and listed, one of junk "
                     "bytes was answered alike and discarded, and 259 deleted the kept file. "
                     "386 switched the camera on and off, ffmpeg read it over UDP, and both "
-                    "video sessions were free after each close"
+                    "video sessions were free after each close. Through a job: 128 with "
+                    "Filename and StartLayer 0 started a print, 129 paused it after the layer "
+                    "in hand, 131 resumed it and 130 stopped it; codes 1 (with the vat warming), "
+                    "2, 3, 4, 5, 6, 7 and 8 came as the spec gives them, and ticks are ms"
                 ),
                 "inferred": (
-                    "the phase table and the print error codes come from the SDCP V3 spec, "
-                    "and preheating (16) from Elegoo's SDK. Ticks are milliseconds, from the "
-                    "spec and a history entry whose begin and end match its ticks. Pause "
-                    "(129), resume (131) and stop (130) follow the spec and "
-                    "alfiedennen/sdcp-saturn-4-ultra, which ran them on a 16K on V1.5.6. "
-                    "Start print (128), behind "
-                    "its opt-in, sends only Filename and StartLayer 0 for a file in /local, "
-                    "as the spec gives, once a fresh status says the machine is idle"
+                    "the print error codes and the phases 0, 9, 10 and 16 come from the SDCP "
+                    "V3 spec and Elegoo's SDK, and were not seen on a printer"
                 ),
                 "absent": "the vat's target, which no command sets",
             },

@@ -292,6 +292,10 @@ def parse_resin(status: Mapping[str, Any], attributes: Mapping[str, Any]) -> dic
     flags = status_flags(status.get("CurrentStatus"))
     print_status = _integer(info.get("Status"))
     state, phase = resin_state_for(flags, print_status)
+    # A 16K on V1.5.6 reports 1 for the minutes its vat warms to the target before a print.
+    vat, target = _number(status.get("TempOfTank")), _number(status.get("TempTargetTank"))
+    if phase is ResinPhase.HOMING and vat is not None and target is not None and vat < target:
+        phase = ResinPhase.PREHEATING
     faults = device_faults(attributes)
     timelapse = _integer(status.get("TimeLapseStatus"))
     resin = ResinState(

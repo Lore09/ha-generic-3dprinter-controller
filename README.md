@@ -159,10 +159,8 @@ fans, light or motion to set: none of them is a command a resin printer takes.
 Starting a print and the camera are each an opt-in, off by default (see below).
 
 **The Saturn 4 Ultra 16K has been checked on a real printer**, firmware V1.5.6: its
-status, attributes, files and history, upload and delete, and the camera. Pause,
-resume, stop and start follow the SDCP V3 specification and another project's work
-on the same model and firmware, and have not been sent to a printer by this project
-yet. The Saturn 4 Ultra and the Mars 5 Ultra are marked unverified.
+status and its phases through a real job, starting, pausing, resuming and stopping
+a print, files and history, upload and delete, and the camera. The Saturn 4 Ultra and the Mars 5 Ultra are marked unverified.
 `docs/protocol-elegoo-sdcp-resin.md` has every measurement and source, and
 `tools/acceptance_sdcp_resin.py` checks a printer read-only.
 
@@ -460,9 +458,8 @@ component. Entity names come from there, not from `strings.json`.
   checks a printer read-only.
 * The **Elegoo resin** adapter was checked on a live Saturn 4 Ultra 16K on firmware
   `V1.5.6`: the status, attributes, files and history, a socket held for 200
-  seconds, upload and delete, and the camera. Pause, resume, stop and start follow
-  the SDCP V3 specification and another project's work on the same printer, and were
-  not sent; `docs/protocol-elegoo-sdcp-resin.md` says which.
+  seconds, a job started, paused, resumed and stopped, upload and delete, and the
+  camera; `docs/protocol-elegoo-sdcp-resin.md` has every measurement.
 * The **Anycubic Kobra X** was checked on firmware 2.0.1.9, except printing, the
   speed, auto-feed, homing Z or all axes and jogging Y or Z. The other Kobras follow
   a capture from a Kobra S1 Max, users' diagnostics and a Kobra X owner's own

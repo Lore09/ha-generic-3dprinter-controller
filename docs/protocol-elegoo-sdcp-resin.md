@@ -199,7 +199,7 @@ not seen on a printer):
 | Status | Print state | Phase |
 | --- | --- | --- |
 | 0 | preparing | starting |
-| 1 | preparing | homing |
+| 1 | preparing | homing, or preheating while the vat is below its target |
 | 2 | printing | descending |
 | 3 | printing | exposing |
 | 4 | printing | lifting |
@@ -211,8 +211,22 @@ not seen on a printer):
 | any other | printing | other |
 
 The print state is the one every printer shares, so automations and the card treat a
-Saturn like any printer; the phase is its own sensor. Only `Status` 4 has been seen
-during a print (issue #21); the order of the others through a job is not measured.
+Saturn like any printer; the phase is its own sensor.
+
+Measured through a job on a 16K V1.5.6, with the owner at the printer, starting the
+file already in `/local`:
+
+* **Start.** `CurrentStatus` [1] and `Status` 1 within 2 seconds, with a `TaskId`,
+  and 1 for five minutes while the vat went from 28 to 30 °C (its target), so the
+  integration calls 1 preheating while the vat is below its target. 16 never came.
+  Then 3 (exposing) and 4 (lifting) in turn, one pair a layer, about 40 seconds a
+  bottom layer; `ReleaseFilm` went up by one a layer, and the UV LED from 28 to 39 °C.
+* **Pause** (129). 5 (pausing) at once; the printer finished the layer it was on
+  and reached 6 (paused) about 60 seconds later.
+* **Resume** (131). 2 (descending) at once, then 3 and 4 again.
+* **Stop** (130). 7 (stopping) at once, then about 20 seconds later `CurrentStatus`
+  [0] with `Status` 8 kept, so the print state stays cancelled, with nothing blocked,
+  until the next job.
 
 `PrintInfo.ErrorNumber` 1 to 5 (en.md:206-218: MD5, file read, resolution, format,
 model), a device check that is not 1, and a release film at its rated count are
@@ -227,12 +241,13 @@ reported as the printer's errors.
 | 258 | file list | `{"Url": "/local"}` | measured on `/local` and `/usb`; entries are `{name, type}`, type 0 a folder, no size |
 | 320 | history ids | `{}` | measured; sent only by the acceptance tool |
 | 321 | history detail | `{"Id": [<id>]}` | measured; sent only by the acceptance tool |
-| 129, 130, 131 | pause, stop, resume | `{}` | spec (en.md:426-535); run on a 16K V1.5.6 by source 2 |
+| 129, 130, 131 | pause, stop, resume | `{}` | measured through a job |
 | 259 | delete | `{"FileList": [<path>], "FolderList": []}` | measured: deleted an uploaded file; source 2 reports Ack 0 even for a missing path |
-| 128 | start print, opted in | `{"Filename": <bare name>, "StartLayer": 0}` | spec (en.md:370-390), cuprum, huygens; Ack 0 on a 16K V1.5.6 per source 2 |
+| 128 | start print, opted in | `{"Filename": <bare name>, "StartLayer": 0}` | measured: started a print of a file in `/local` |
 | 386 | video, opted in | `{"Enable": 1}` or `{"Enable": 0}` | measured: Ack 0 and `rtsp://<host>:554/video` both ways |
 
-None of 128, 129, 130 or 131 has been sent to a printer by this project yet.
+128 `{"Filename": <bare name>, "StartLayer": 0}`, 129, 131 and 130 were sent to a 16K
+V1.5.6 through a job, each answered `Ack` 0 and did what the spec says (see States).
 259 `{"FileList": ["/local/<file>"], "FolderList": []}` deleted an uploaded file on a
 16K V1.5.6, and the list afterwards confirmed it. Around them:
 
@@ -332,8 +347,8 @@ seconds and the machine's real size. The integration does not read it.
 
 ## Still to verify
 
-Pause, resume, stop and start print; the phases through a real job and whether a
-printing Saturn pushes its status; the camera during a print; what `HeatStatus` means; and every model other than the 16K. The Saturn 4
+Whether a printing Saturn pushes its status unasked; a job to its end (9); the camera
+during a print; the phases 0 and 10; what `HeatStatus` means; and every model other than the 16K. The Saturn 4
 Ultra and the Mars 5 Ultra are named by source 4, have no vat reading here, and are
 marked unverified.
 

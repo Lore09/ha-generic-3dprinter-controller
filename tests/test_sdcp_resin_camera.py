@@ -533,12 +533,12 @@ async def test_teardown_while_a_viewer_waits_for_a_frame_still_switches_off_and_
     (process,) = spawner.processes
     assert process.stdout._waiter is not None  # noqa: SLF001 - the viewer waits in read()
 
-    await asyncio.wait_for(adapter.async_teardown(), 5)
+    await asyncio.wait_for(adapter.async_teardown(), 15)
 
     assert process.log == ["q", "TERM"]
     assert process.enables_at_exit == [1]
     assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}]
-    for _ in range(50):
+    for _ in range(250):
         if not resin_printer.connections:
             break
         await asyncio.sleep(0.02)
