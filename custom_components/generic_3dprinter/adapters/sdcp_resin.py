@@ -474,11 +474,29 @@ class SdcpResinProtocol(SdcpSession):
         response = await self._async_send_checked("delete_files", {"FileList": [path], "FolderList": []})
         failed = (response or {}).get("ErrData")
         folder = path.rsplit("/", 1)[0] or "/"
-        kept = any(item.path == path for item in await self._async_list_folder(folder))
+        kept = any(item.path == path for item in await self._async_list_after_delete(path, folder))
         if kept or (isinstance(failed, list) and path in failed):
             raise CommandRejectedError(
                 f"the printer did not delete {path}", reason="the file is still on the printer"
             )
+
+    async def _async_list_after_delete(self, path: str, folder: str) -> list[FileEntry]:
+        """List the folder a delete touched, and raise when no list arrives,
+        since a missing list would read as a folder without the file."""
+        self._file_list_event.clear()
+        self._file_list = []
+        response = await self._async_request(self.commands["file_list"], {"Url": folder})
+        ack = _integer((response or {}).get("Ack"))
+        if not ack and not self._file_list_event.is_set():
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._file_list_event.wait(), timeout=sdcp.PUSH_TIMEOUT)
+        if ack or not self._file_list_event.is_set():
+            raise CommandRejectedError(
+                f"could not confirm the delete of {path}",
+                code=ack or None,
+                reason="the printer did not list the folder afterwards",
+            )
+        return list(self._file_list)
 
     async def async_upload_file(
         self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None

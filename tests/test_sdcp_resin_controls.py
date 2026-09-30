@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 import pytest
 
+from custom_components.generic_3dprinter.adapters import sdcp
 from custom_components.generic_3dprinter.adapters.sdcp_resin import (
     RESIN_COMMAND,
     SdcpResinProtocol,
@@ -177,13 +178,40 @@ async def test_a_file_the_printer_names_in_errdata_is_refused(
     async def answer(name: str, data: Any) -> dict[str, Any]:
         return {"Ack": 0, "ErrData": list(data["FileList"])}
 
-    async def empty(url: str) -> list[Any]:
+    async def empty(path: str, url: str) -> list[Any]:
         return []
 
     monkeypatch.setattr(adapter, "_async_send_checked", answer)
-    monkeypatch.setattr(adapter, "_async_list_folder", empty)
+    monkeypatch.setattr(adapter, "_async_list_after_delete", empty)
     with pytest.raises(CommandRejectedError, match="did not delete"):
         await adapter._async_dispatch(Command.DELETE_FILE, {"filename": CAPTURED_FILE})  # noqa: SLF001
+
+
+async def test_a_folder_the_printer_will_not_list_leaves_the_delete_unconfirmed(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """A busy 258 sends no list, which must not read as a folder without the file."""
+    resin_printer.keep_deleted = True
+    resin_printer.acks[258] = 1
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(CommandRejectedError, match="could not confirm the delete") as caught:
+        await adapter.async_send(Command.DELETE_FILE, filename=CAPTURED_FILE)
+    assert caught.value.code == 1
+    assert resin_printer.sent_commands[-2:] == [259, 258]
+    await adapter.async_teardown()
+
+
+async def test_a_folder_list_that_never_comes_leaves_the_delete_unconfirmed(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resin_printer.keep_deleted = True
+    resin_printer.withhold_file_list = True
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.1)
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(CommandRejectedError, match="could not confirm the delete") as caught:
+        await adapter.async_send(Command.DELETE_FILE, filename=CAPTURED_FILE)
+    assert caught.value.code is None
+    await adapter.async_teardown()
 
 
 async def test_a_refused_delete_does_not_remove_the_file(

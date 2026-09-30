@@ -71,7 +71,9 @@ class FakeResinPrinter:
         self.files: list[dict[str, Any]] = list(self.frames["file_list"]["Data"]["Data"]["FileList"])
         #: Ack a delete and keep the file, as a printer that failed to delete it would.
         self.keep_deleted = False
-        #: The ``Ack`` to answer a command that acts with, by code; 0 when absent.
+        #: Answer command 258 with its ack alone, never listing the folder.
+        self.withhold_file_list = False
+        #: The ``Ack`` to answer a command that acts, or 258, with, by code; 0 when absent.
         self.acks: dict[int, int] = {}
 
         #: Every request's ``Data``, and its command code, in arrival order.
@@ -218,7 +220,10 @@ class FakeResinPrinter:
         elif cmd == 258:
             folder = str(data.get("Url") or "")
             listed = [item for item in self.files if item["name"].rsplit("/", 1)[0] == folder]
-            await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "FileList": listed}))
+            if self.acks.get(cmd, 0) or self.withhold_file_list:
+                await ws.send_str(self._response(cmd, request_id, {"Ack": self.acks.get(cmd, 0)}))
+            else:
+                await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "FileList": listed}))
         elif cmd == 320:
             await ws.send_str(self._response(cmd, request_id, self.frames["history"]["Data"]["Data"]))
         elif cmd == 321:
