@@ -131,6 +131,11 @@ COMMAND: Final[Mapping[str, int]] = MappingProxyType(
     }
 )
 
+#: The read-only codes every SDCP session sends, whatever the printer prints with.
+SESSION_COMMAND: Final[Mapping[str, int]] = MappingProxyType(
+    {"status": 0, "attributes": 1, "file_list": 258}
+)
+
 #: ``PrintInfo.Status`` is a code table, not a bit field. Values 2 to 4 and 23 to
 #: 26 are resin-only and are mapped to a neutral state rather than to a guess.
 STATE_BY_PRINT_STATUS: Final[Mapping[int, PrintState]] = MappingProxyType(
@@ -376,14 +381,14 @@ def _reply_host(reply: dict[str, Any]) -> str:
     return ""
 
 
-class SdcpProtocol(Protocol):
-    """SDCP over a WebSocket, with the MJPEG camera on its own HTTP port."""
+class SdcpSession(Protocol):
+    """One SDCP WebSocket session: the socket, its heartbeat, requests and the files.
+    It knows no kind of printer; a subclass names the ``commands`` it may send, and reads."""
 
-    @classmethod
-    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
-        """Broadcast the SDCP discovery literal, as the printer's own tools do."""
-        found = await async_discover_sdcp(timeout)
-        return [found] if found is not None else []
+    #: The command codes this session may put on the wire, by name.
+    commands: Mapping[str, int] = SESSION_COMMAND
+    #: What a nonzero ``Ack`` means, by code.
+    ack_messages: Mapping[int, str] = ACK_MESSAGES
 
     def __init__(
         self,
@@ -394,7 +399,7 @@ class SdcpProtocol(Protocol):
         unsafe: tuple[UnsafeFeature, ...] = (),
         models: tuple[ModelProfile, ...] = (),
     ) -> None:
-        """Create the adapter for one printer."""
+        """Create the session for one printer."""
         super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._reader: asyncio.Task[None] | None = None
@@ -407,15 +412,10 @@ class SdcpProtocol(Protocol):
         self._file_list_event = asyncio.Event()
         self._mainboard_id = ""
         self._send_lock = asyncio.Lock()
-        self._canvas: FilamentSystem | None = None
-        self._canvas_at: float | None = None
-        self._canvas_print_status: int | None = None
         self._heartbeat: asyncio.Task[None] | None = None
         #: When the printer last sent anything, and when it last sent its status.
         self._last_frame_at = 0.0
         self._status_at: float | None = None
-        #: Whether command 386 switched the camera on over the current socket.
-        self._video_enabled = False
 
     # --------------------------------------------------------------- addresses
 
@@ -425,30 +425,36 @@ class SdcpProtocol(Protocol):
         return self.config.port or DEFAULT_WS_PORT
 
     @property
-    def camera_port(self) -> int:
-        """Return the camera port, defaulting to the one this hardware uses."""
-        return self.config.camera_port or DEFAULT_CAMERA_PORT
-
-    @property
     def ws_url(self) -> str:
         """Return the SDCP WebSocket URL."""
         scheme = "wss" if self.config.tls else "ws"
         return f"{scheme}://{self.config.host}:{self.ws_port}{WS_PATH}"
 
     @property
-    def camera_url(self) -> str:
-        """Return the MJPEG camera URL."""
-        return f"http://{self.config.host}:{self.camera_port}{CAMERA_PATH}"
-
-    @property
-    def web_ui_url(self) -> str:
-        """Return the printer's own web UI address."""
-        return f"http://{self.config.host}/"
-
-    @property
     def attributes(self) -> Mapping[str, Any]:
         """Return the last attributes payload the printer pushed."""
         return self._attributes
+
+    @property
+    def upload_url(self) -> str:
+        """Return the address files are posted to."""
+        return f"{self.config.scheme}://{self.config.host}{UPLOAD_PATH}"
+
+    # ------------------------------------------------------------------- hooks
+
+    def _frame(self, cmd: int, data: Mapping[str, Any] | None) -> tuple[str, str]:
+        """Return ``(request_id, frame)`` for one request in this printer's envelope."""
+        return build_frame(self._mainboard_id, cmd, data)
+
+    def _heartbeat_payload(self) -> str:
+        """Return the text the heartbeat sends."""
+        return HEARTBEAT_TEXT
+
+    async def _check_identity(self) -> None:
+        """Refuse a printer this session must not drive. Every printer passes here."""
+
+    def _forget_socket_state(self) -> None:
+        """Drop what was known only over the socket that just opened or ended."""
 
     # --------------------------------------------------------------- lifecycle
 
@@ -492,19 +498,21 @@ class SdcpProtocol(Protocol):
             raise UnreachableError(f"timeout contacting {self.config.redacted_url}") from err
 
         self._last_frame_at = time.monotonic()
-        self._video_enabled = False
+        self._forget_socket_state()
         self._reader = asyncio.create_task(self._async_read_frames())
         self._heartbeat = asyncio.create_task(self._async_heartbeat())
 
-        await self._async_request(COMMAND["attributes"])
+        await self._async_request(self.commands["attributes"])
         with suppress(TimeoutError):
             await asyncio.wait_for(self._attributes_event.wait(), timeout=PUSH_TIMEOUT)
+        await self._check_identity()
 
         self._mainboard_id = str(self._attributes.get("MainboardID") or "")
         # Like the printer's own page, ask for the status on every connection. The
         # printer pushes it only when asked, so a status cached from before a power
         # cycle would otherwise be reported until somebody opened that page.
         await self._async_refresh_status()
+        await self._check_identity()
         _LOGGER.debug(
             "%s: SDCP ready, mainboard %s, firmware %s",
             self.config.name,
@@ -586,8 +594,7 @@ class SdcpProtocol(Protocol):
         except (aiohttp.ClientError, ConnectionResetError) as err:
             _LOGGER.debug("%s: SDCP socket ended: %s", self.config.name, err)
         finally:
-            # A printer that went away comes back with its camera off.
-            self._video_enabled = False
+            self._forget_socket_state()
             self._fail_pending(UnreachableError("the SDCP socket closed"))
 
     def _fail_pending(self, error: Exception) -> None:
@@ -673,7 +680,7 @@ class SdcpProtocol(Protocol):
                 break
             try:
                 async with self._send_lock:
-                    await ws.send_str(HEARTBEAT_TEXT)
+                    await ws.send_str(self._heartbeat_payload())
             except (aiohttp.ClientError, ConnectionResetError) as err:
                 _LOGGER.debug("%s: the heartbeat could not be sent: %s", self.config.name, err)
                 with suppress(aiohttp.ClientError, ConnectionResetError):
@@ -683,7 +690,7 @@ class SdcpProtocol(Protocol):
     async def _async_refresh_status(self) -> None:
         """Ask for the status, as the page does, and wait briefly for the push."""
         self._status_event.clear()
-        await self._async_request(COMMAND["status"])
+        await self._async_request(self.commands["status"])
         with suppress(TimeoutError):
             await asyncio.wait_for(self._status_event.wait(), timeout=PUSH_TIMEOUT)
 
@@ -708,7 +715,7 @@ class SdcpProtocol(Protocol):
         if ws is None or ws.closed:
             raise UnreachableError("the SDCP socket is not open")
 
-        request_id, frame = build_frame(self._mainboard_id, cmd, data)
+        request_id, frame = self._frame(cmd, data)
         future: asyncio.Future[Mapping[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
 
@@ -741,14 +748,133 @@ class SdcpProtocol(Protocol):
 
     async def _async_send_checked(self, name: str, data: Mapping[str, Any]) -> None:
         """Send a command and raise when the printer refuses it."""
-        response = await self._async_request(COMMAND[name], data)
+        response = await self._async_request(self.commands[name], data)
         ack = _integer((response or {}).get("Ack"))
         if ack is not None and ack != 0:
             raise CommandRejectedError(
-                f"the printer refused {name}: {ACK_MESSAGES.get(ack, 'unrecognised reason')}",
+                f"the printer refused {name}: {self.ack_messages.get(ack, 'unrecognised reason')}",
                 code=ack,
-                reason=ACK_MESSAGES.get(ack),
+                reason=self.ack_messages.get(ack),
             )
+
+    # ------------------------------------------------------------------ files
+
+    async def async_list_files(self) -> Sequence[FileEntry]:
+        """Return the files on the printer's internal storage."""
+        self._file_list_event.clear()
+        self._file_list = []
+        response = await self._async_request(self.commands["file_list"], {"Url": "/local"})
+
+        # Observed on hardware: the ack and the list are separate frames, so the
+        # ack frame alone carries no files.
+        if "FileList" in (response or {}):
+            self._file_list = parse_file_list((response or {}).get("FileList"))
+        elif not self._file_list:
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._file_list_event.wait(), timeout=PUSH_TIMEOUT)
+        return list(self._file_list)
+
+    async def async_upload_file(
+        self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None
+    ) -> FileEntry:
+        """Upload a file in 1 MiB chunks over HTTP.
+
+        The upload shares neither the port nor the socket of the control channel, so
+        it cannot trip the unverified-command crash path.
+        """
+        payload = bytearray()
+        async for chunk in stream:
+            payload.extend(chunk)
+        body = bytes(payload)
+        total = len(body)
+        filename = name.rsplit("/", 1)[-1]
+        digest = hashlib.md5(body).hexdigest()  # noqa: S324 - required by the printer's protocol
+        transfer_id = uuid.uuid4().hex
+        url = self.upload_url
+
+        offset = 0
+        while True:
+            chunk = body[offset : offset + UPLOAD_CHUNK]
+            form = aiohttp.FormData()
+            form.add_field("Check", "1")
+            form.add_field("S-File-MD5", digest)
+            form.add_field("Offset", str(offset))
+            form.add_field("Uuid", transfer_id)
+            form.add_field("TotalSize", str(total))
+            form.add_field(
+                "File", chunk, filename=filename, content_type="application/octet-stream"
+            )
+
+            try:
+                async with self._session.post(
+                    url, data=form, timeout=aiohttp.ClientTimeout(total=180)
+                ) as response:
+                    result = await _response_json(response)
+            except aiohttp.ClientError as err:
+                raise UnreachableError(f"the upload failed: {err}") from err
+
+            if result is not None and str(result.get("code")) not in ("000000", "None"):
+                raise CommandRejectedError(
+                    f"the printer refused the upload: {result.get('messages')}",
+                    code=result.get("code"),
+                )
+
+            offset += UPLOAD_CHUNK
+            if offset >= total:
+                break
+
+        return FileEntry(name=filename, path=f"/local/{filename}", size=total)
+
+
+class SdcpProtocol(SdcpSession):
+    """SDCP over a WebSocket, with the MJPEG camera on its own HTTP port."""
+
+    commands = COMMAND
+
+    @classmethod
+    async def async_discover(cls, timeout: float) -> list[DiscoveryResult]:
+        """Broadcast the SDCP discovery literal, as the printer's own tools do."""
+        found = await async_discover_sdcp(timeout)
+        return [found] if found is not None else []
+
+    def __init__(
+        self,
+        config: PrinterConfig,
+        session: aiohttp.ClientSession,
+        *,
+        granted: frozenset[Capability],
+        unsafe: tuple[UnsafeFeature, ...] = (),
+        models: tuple[ModelProfile, ...] = (),
+    ) -> None:
+        """Create the adapter for one printer."""
+        super().__init__(config, session, granted=granted, unsafe=unsafe, models=models)
+        self._canvas: FilamentSystem | None = None
+        self._canvas_at: float | None = None
+        self._canvas_print_status: int | None = None
+        #: Whether command 386 switched the camera on over the current socket.
+        self._video_enabled = False
+
+    # --------------------------------------------------------------- addresses
+
+    @property
+    def camera_port(self) -> int:
+        """Return the camera port, defaulting to the one this hardware uses."""
+        return self.config.camera_port or DEFAULT_CAMERA_PORT
+
+    @property
+    def camera_url(self) -> str:
+        """Return the MJPEG camera URL."""
+        return f"http://{self.config.host}:{self.camera_port}{CAMERA_PATH}"
+
+    @property
+    def web_ui_url(self) -> str:
+        """Return the printer's own web UI address."""
+        return f"http://{self.config.host}/"
+
+    def _forget_socket_state(self) -> None:
+        """Ask for the camera again over the next socket."""
+        # A printer that went away comes back with its camera off.
+        self._video_enabled = False
 
     # ------------------------------------------------------------------- read
 
@@ -841,7 +967,7 @@ class SdcpProtocol(Protocol):
         if fresh and parsed["print_status"] == self._canvas_print_status:
             return self._canvas
         try:
-            response = await self._async_request(COMMAND["canvas"])
+            response = await self._async_request(self.commands["canvas"])
         except UnreachableError:
             raise
         except ProtocolError as err:
@@ -920,79 +1046,11 @@ class SdcpProtocol(Protocol):
             "set_params", {"LightStatus": {"SecondLight": 1 if params["on"] else 0}}
         )
 
-    # ------------------------------------------------------------------ files
-
-    async def async_list_files(self) -> Sequence[FileEntry]:
-        """Return the files on the printer's internal storage."""
-        self._file_list_event.clear()
-        self._file_list = []
-        response = await self._async_request(COMMAND["file_list"], {"Url": "/local"})
-
-        # Observed on hardware: the ack and the list are separate frames, so the
-        # ack frame alone carries no files.
-        if "FileList" in (response or {}):
-            self._file_list = parse_file_list((response or {}).get("FileList"))
-        elif not self._file_list:
-            with suppress(TimeoutError):
-                await asyncio.wait_for(self._file_list_event.wait(), timeout=PUSH_TIMEOUT)
-        return list(self._file_list)
-
     async def _async_delete_file(self, params: Mapping[str, Any]) -> None:
         name = str(params["filename"])
         if not name.startswith("/"):
             name = f"/local/{name}"
         await self._async_send_checked("delete_files", {"FileList": [name]})
-
-    async def async_upload_file(
-        self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None
-    ) -> FileEntry:
-        """Upload a file in 1 MiB chunks over HTTP.
-
-        The upload shares neither the port nor the socket of the control channel, so
-        it cannot trip the unverified-command crash path.
-        """
-        payload = bytearray()
-        async for chunk in stream:
-            payload.extend(chunk)
-        body = bytes(payload)
-        total = len(body)
-        filename = name.rsplit("/", 1)[-1]
-        digest = hashlib.md5(body).hexdigest()  # noqa: S324 - required by the printer's protocol
-        transfer_id = uuid.uuid4().hex
-        url = f"{self.config.scheme}://{self.config.host}{UPLOAD_PATH}"
-
-        offset = 0
-        while True:
-            chunk = body[offset : offset + UPLOAD_CHUNK]
-            form = aiohttp.FormData()
-            form.add_field("Check", "1")
-            form.add_field("S-File-MD5", digest)
-            form.add_field("Offset", str(offset))
-            form.add_field("Uuid", transfer_id)
-            form.add_field("TotalSize", str(total))
-            form.add_field(
-                "File", chunk, filename=filename, content_type="application/octet-stream"
-            )
-
-            try:
-                async with self._session.post(
-                    url, data=form, timeout=aiohttp.ClientTimeout(total=180)
-                ) as response:
-                    result = await _response_json(response)
-            except aiohttp.ClientError as err:
-                raise UnreachableError(f"the upload failed: {err}") from err
-
-            if result is not None and str(result.get("code")) not in ("000000", "None"):
-                raise CommandRejectedError(
-                    f"the printer refused the upload: {result.get('messages')}",
-                    code=result.get("code"),
-                )
-
-            offset += UPLOAD_CHUNK
-            if offset >= total:
-                break
-
-        return FileEntry(name=filename, path=f"/local/{filename}", size=total)
 
     # ----------------------------------------------------------------- camera
 
@@ -1007,7 +1065,7 @@ class SdcpProtocol(Protocol):
         if self._video_enabled:
             return
         try:
-            response = await self._async_request(COMMAND["video"], {"Enable": 1})
+            response = await self._async_request(self.commands["video"], {"Enable": 1})
         except ProtocolError as err:
             _LOGGER.debug("%s: the camera was not switched on: %s", self.config.name, err)
             return

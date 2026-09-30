@@ -342,3 +342,29 @@ def test_a_frame_without_a_request_id_does_not_raise() -> None:
         adapter._handle_frame(frame)  # noqa: SLF001
 
     asyncio.run(scenario())
+
+
+# ------------------------------------------------------------ shared session
+
+
+def test_sdcp_session_has_no_fdm_surface() -> None:
+    """A printer driven by the bare session cannot be sent an FDM-only command."""
+    session = sdcp.SdcpSession
+    for name in ("set_printer_params", "_async_read_canvas", "camera_url", "web_ui_url"):
+        assert not hasattr(session, name), name
+    assert not [name for name in dir(session) if name.startswith("_async_set_")]
+    assert set(session.commands.values()) == {0, 1, 258}
+    assert not {324, 403, 386, 128} & set(session.commands.values())
+
+
+def test_the_centauri_keeps_every_hook_as_it_was() -> None:
+    """The split changes nothing on the wire for the Centauri Carbon."""
+    adapter = _adapter(frozenset({Capability.FILE_UPLOAD}))
+    assert isinstance(adapter, sdcp.SdcpSession)
+    assert adapter.commands is sdcp.COMMAND
+    assert adapter.ack_messages is sdcp.ACK_MESSAGES
+    assert adapter.upload_url == "http://127.0.0.1/uploadFile/upload"
+    assert adapter._heartbeat_payload() == "ping"  # noqa: SLF001
+    request_id, frame = adapter._frame(0, {})  # noqa: SLF001
+    assert json.loads(frame)["Data"]["RequestID"] == request_id
+    assert json.loads(frame)["Data"]["MainboardID"] == ""

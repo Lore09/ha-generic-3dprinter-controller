@@ -198,3 +198,22 @@ async def test_a_reset_closes_the_socket_it_drops() -> None:
     assert reader.cancelled()
     assert adapter._ws is None  # noqa: SLF001
     assert adapter._status == {}, "a status from before the reset would be reported as current"  # noqa: SLF001
+
+
+async def test_the_identity_is_checked_after_the_attributes_and_the_status(
+    printer, session: aiohttp.ClientSession
+) -> None:
+    """A subclass sees the attributes, then the status, before the session is ready."""
+    seen: list[tuple[list[int], bool, bool]] = []
+
+    class Checked(sdcp.SdcpProtocol):
+        async def _check_identity(self) -> None:
+            seen.append((list(printer.sent_commands), bool(self._attributes), bool(self._status)))
+
+    config = make_adapter(printer, session).config
+    adapter = Checked(config, session, granted=ADAPTERS[ProtocolId.SDCP_CC1].capabilities)
+    try:
+        await adapter.async_setup()
+        assert seen == [([1], True, False), ([1, 0], True, True)]
+    finally:
+        await adapter.async_teardown()
