@@ -55,7 +55,9 @@ candidate when the address is probed.
 
 ## Discovery and identity
 
-The UDP discovery literal `M99999` to port 3000 is the Centauri's. The spec gives a
+The UDP discovery literal `M99999` to port 3000 is the Centauri's. The 16K answers
+with a flat `Data` object (`Name`, `MachineName`, `BrandName`, `MainboardIP`,
+`MainboardID`, `ProtocolVersion`, `FirmwareVersion`), measured. The spec gives a
 flat `Data` in the reply (en.md:17-29); source 2 describes a nested
 `Data.Attributes` and `Data.Status`. The raw reply of this printer was not saved, so
 `sdcp_identity` reads both, and a reply without an address falls back to the
@@ -226,11 +228,11 @@ reported as the printer's errors.
 | 320 | history ids | `{}` | measured; sent only by the acceptance tool |
 | 321 | history detail | `{"Id": [<id>]}` | measured; sent only by the acceptance tool |
 | 129, 130, 131 | pause, stop, resume | `{}` | spec (en.md:426-535); run on a 16K V1.5.6 by source 2 |
-| 259 | delete | `{"FileList": [<path>], "FolderList": []}` | spec; source 2 reports Ack 0 even for a missing path |
+| 259 | delete | `{"FileList": [<path>], "FolderList": []}` | measured: deleted an uploaded file; source 2 reports Ack 0 even for a missing path |
 | 128 | start print, opted in | `{"Filename": <bare name>, "StartLayer": 0}` | spec (en.md:370-390), cuprum, huygens; Ack 0 on a 16K V1.5.6 per source 2 |
-| 386 | video, opted in | `{"Enable": 1}` or `{"Enable": 0}` | spec (en.md:883-921) |
+| 386 | video, opted in | `{"Enable": 1}` or `{"Enable": 0}` | measured: Ack 0 and `rtsp://<host>:554/video` both ways |
 
-None of 128, 129, 130, 131 or 386 has been sent to a printer by this project yet.
+None of 128, 129, 130 or 131 has been sent to a printer by this project yet.
 259 `{"FileList": ["/local/<file>"], "FolderList": []}` deleted an uploaded file on a
 16K V1.5.6, and the list afterwards confirmed it. Around them:
 
@@ -269,8 +271,18 @@ socket.
 
 ## Camera
 
-Sourced, and not yet opened by this project. Command 386 `{"Enable": 1}` answers
-with an RTSP `VideoUrl` (en.md:883-921). The sources agree on three hazards:
+Opened on a 16K V1.5.6 through this adapter, from a machine on the printer's LAN:
+386 `{"Enable": 1}` answered `Ack` 0 and `VideoUrl` `rtsp://<host>:554/video`, a
+still came in 5.2 seconds and five live frames in 6.9, and after each close
+`NumberOfVideoStreamConnected` was back to 0 of 2 and 386 `{"Enable": 0}` answered
+`Ack` 0. The picture is 1280x720, the vat seen from the front.
+
+The printer sends the video over UDP to the address that asked for it, so Home
+Assistant has to be on the printer's own network: Home Assistant OS, or a container
+on the host network. Behind NAT, such as a container on a bridge network or WSL,
+the frames never arrive, and the camera gives nothing.
+
+The sources agree on three hazards:
 
 * The server takes RTSP over UDP only, and its timestamps do not always increase
   (huygens), so Home Assistant's stream component, which prefers TCP, is not used.
@@ -320,8 +332,8 @@ seconds and the machine's real size. The integration does not read it.
 
 ## Still to verify
 
-The discovery reply's shape; the camera; pause, resume, stop and start print; the phases through a real job and whether a printing Saturn pushes its
-status; what `HeatStatus` means; and every model other than the 16K. The Saturn 4
+Pause, resume, stop and start print; the phases through a real job and whether a
+printing Saturn pushes its status; the camera during a print; what `HeatStatus` means; and every model other than the 16K. The Saturn 4
 Ultra and the Mars 5 Ultra are named by source 4, have no vat reading here, and are
 marked unverified.
 

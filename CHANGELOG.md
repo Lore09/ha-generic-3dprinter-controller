@@ -14,9 +14,11 @@
   sessions are free and is closed gracefully, since a session a killed client
   leaves behind needs a power cycle. No nozzle, bed, fan, light or motion control
   appears. The card shows the vat, the UV LED, the film and the phase, such as
-  "Printing · Exposing". The 16K was read on a printer, firmware V1.5.6, while
-  idle; its commands, the upload and the camera follow the SDCP V3 specification
-  and are not measured yet. The Saturn 4 Ultra and Mars 5 Ultra are marked
+  "Printing · Exposing". The 16K was checked on a printer, firmware V1.5.6: its
+  state, files and history, upload and delete, and the camera, whose video comes
+  over UDP, so Home Assistant has to be on the printer's network. An upload is
+  reported only once the printer has kept the file, since it discards one it cannot
+  print without saying so. The Saturn 4 Ultra and Mars 5 Ultra are marked
   unverified, and the Saturn 3 Ultra and Mars 4 Ultra, which speak SDCP over MQTT,
   are refused. `tools/acceptance_sdcp_resin.py` checks one read-only, and
   `docs/protocol-elegoo-sdcp-resin.md` says what is measured and what is sourced.

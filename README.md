@@ -158,11 +158,11 @@ fans, light or motion to set: none of them is a command a resin printer takes.
 
 Starting a print and the camera are each an opt-in, off by default (see below).
 
-**The Saturn 4 Ultra 16K has been read on a real printer**, firmware V1.5.6, while
-idle: its status, attributes, files and history. Pause, resume, stop, delete,
-upload, start and the camera follow the SDCP V3 specification and another project's
-work on the same model and firmware, and have not been sent to a printer by this
-project yet. The Saturn 4 Ultra and the Mars 5 Ultra are marked unverified.
+**The Saturn 4 Ultra 16K has been checked on a real printer**, firmware V1.5.6: its
+status, attributes, files and history, upload and delete, and the camera. Pause,
+resume, stop and start follow the SDCP V3 specification and another project's work
+on the same model and firmware, and have not been sent to a printer by this project
+yet. The Saturn 4 Ultra and the Mars 5 Ultra are marked unverified.
 `docs/protocol-elegoo-sdcp-resin.md` has every measurement and source, and
 `tools/acceptance_sdcp_resin.py` checks a printer read-only.
 
@@ -215,7 +215,9 @@ An Elegoo resin printer has two opt-ins, both off by default:
   off and on. The integration opens it only while both places are free, at most once
   every 10 seconds and not in a print's first three layers, and closes it
   gracefully, but freeing a stuck place may still need a power cycle. Close
-  Elegoo's slicer and app while the camera is in use.
+  Elegoo's slicer and app while the camera is in use. The video comes over UDP, so
+  Home Assistant has to be on the printer's network: Home Assistant OS, or a
+  container on the host network, not one behind NAT.
 
 ## The card
 
@@ -432,7 +434,9 @@ and add the printer as an Elegoo resin printer.
 **A resin printer's camera will not open.** It opens only while the printer reports
 both of its two video places free. Close Elegoo's slicer and app. If the printer
 still counts a viewer after they are closed, a viewer was not closed cleanly, and
-only switching the printer off and on frees its place.
+only switching the printer off and on frees its place. If it opens but shows no
+picture, Home Assistant is behind NAT (a container on a bridge network, WSL): the
+printer sends the video over UDP, which does not come back through it.
 
 **Entity names look generic.** Confirm `translations/en.json` shipped with the
 component. Entity names come from there, not from `strings.json`.
@@ -454,11 +458,11 @@ component. Entity names come from there, not from `strings.json`.
   The speed mode can only be changed during a print: an idle printer refuses it.
   `docs/protocol-elegoo-cc2.md` has every measurement, and `tools/acceptance_cc2.py`
   checks a printer read-only.
-* The **Elegoo resin** adapter was read on a live Saturn 4 Ultra 16K on firmware
-  `V1.5.6` while idle: the status, attributes, files and history, and a socket held
-  for 200 seconds. Its commands, the upload and the camera follow the SDCP V3
-  specification and another project's work on the same printer, and were not sent;
-  `docs/protocol-elegoo-sdcp-resin.md` says which.
+* The **Elegoo resin** adapter was checked on a live Saturn 4 Ultra 16K on firmware
+  `V1.5.6`: the status, attributes, files and history, a socket held for 200
+  seconds, upload and delete, and the camera. Pause, resume, stop and start follow
+  the SDCP V3 specification and another project's work on the same printer, and were
+  not sent; `docs/protocol-elegoo-sdcp-resin.md` says which.
 * The **Anycubic Kobra X** was checked on firmware 2.0.1.9, except printing, the
   speed, auto-feed, homing Z or all axes and jogging Y or Z. The other Kobras follow
   a capture from a Kobra S1 Max, users' diagnostics and a Kobra X owner's own

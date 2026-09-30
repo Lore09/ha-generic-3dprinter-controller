@@ -132,15 +132,17 @@ _UNSAFE_SDCP_RESIN_CAMERA: Final = UnsafeFeature(
         "The camera is an RTSP stream with room for two viewers, and a viewer that is not "
         "closed cleanly keeps its place until the printer is switched off and on. This "
         "integration opens it only while both places are free, at most once every 10 seconds "
-        "and not in a print's first layers, and closes it gracefully, but it has not yet "
-        "opened the camera on a resin printer. Enable this only if you accept that freeing "
-        "the camera may need a power cycle."
+        "and not in a print's first layers, and closes it gracefully, as measured on a Saturn "
+        "4 Ultra 16K. The video comes over UDP, so Home Assistant must be on the printer's "
+        "network, not behind NAT. Enable this only if you accept that freeing the camera "
+        "may need a power cycle."
     ),
     gates=frozenset({Capability.CAMERA}),
     evidence=(
         "command 386 and its VideoUrl from the SDCP V3 spec (en.md:883-921); RTSP over UDP "
         "only, from huygens server.py:964-1054; the session a killed client leaks, from "
-        "alfiedennen/sdcp-saturn-4-ultra camera-stream-leak.md; not measured by this project"
+        "alfiedennen/sdcp-saturn-4-ultra camera-stream-leak.md. Measured on a 16K V1.5.6: "
+        "Ack 0 and rtsp://<host>:554/video, a still in 5 s, both sessions free after each close"
     ),
 )
 
@@ -365,23 +367,21 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                     "a Saturn 4 Ultra 16K on firmware V1.5.6 answered commands 0, 1, 258 "
                     "and 320 in the envelope this adapter sends, pushed the attributes and "
                     "the status only when asked, never answered the text ping, and kept a "
-                    "socket open 200 seconds with or without a command 0 every 20 seconds"
+                    "socket open 200 seconds with or without a command 0 every 20 seconds. "
+                    "An upload of a real .goo to port 3030 was kept and listed, one of junk "
+                    "bytes was answered alike and discarded, and 259 deleted the kept file. "
+                    "386 switched the camera on and off, ffmpeg read it over UDP, and both "
+                    "video sessions were free after each close"
                 ),
                 "inferred": (
                     "the phase table and the print error codes come from the SDCP V3 spec, "
                     "and preheating (16) from Elegoo's SDK. Ticks are milliseconds, from the "
                     "spec and a history entry whose begin and end match its ticks. Pause "
-                    "(129), resume (131), stop (130) and delete (259) follow the spec and "
-                    "alfiedennen/sdcp-saturn-4-ultra, which ran them on a 16K on V1.5.6; "
-                    "delete lists the folder afterwards, since 259 acks a missing path too. "
-                    "Uploads post the Centauri's chunked form to port 3030, as the spec and "
-                    "that project give, only while the machine is idle, and only the file "
-                    "types the printer names in SupportFileType. Start print (128), behind "
+                    "(129), resume (131) and stop (130) follow the spec and "
+                    "alfiedennen/sdcp-saturn-4-ultra, which ran them on a 16K on V1.5.6. "
+                    "Start print (128), behind "
                     "its opt-in, sends only Filename and StartLayer 0 for a file in /local, "
-                    "as the spec gives, once a fresh status says the machine is idle. The "
-                    "camera, behind its opt-in, sends 386 Enable 1 only while command 1 shows "
-                    "both video sessions free, reads the RTSP VideoUrl with ffmpeg over UDP, "
-                    "stops ffmpeg with q or SIGTERM so it sends TEARDOWN, then sends Enable 0"
+                    "as the spec gives, once a fresh status says the machine is idle"
                 ),
                 "absent": "the vat's target, which no command sets",
             },
