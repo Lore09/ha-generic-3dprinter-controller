@@ -10,6 +10,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing, asynccontextmanager, suppress
+from dataclasses import replace
 from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -67,6 +68,9 @@ MACHINE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
         8: "file_received",
     }
 )
+
+#: The ``CurrentStatus`` code a printer holds while it takes a file and checks it.
+TRANSFERRING: Final = 2
 
 #: A machine that is not printing and says what else it does, with ``PrintInfo.Status`` 0.
 MACHINE_PHASES: Final[Mapping[int, ResinPhase]] = MappingProxyType(
@@ -146,6 +150,11 @@ LOCAL_FOLDER: Final = "/local"
 
 #: The job types a Saturn 4 Ultra 16K names in ``SupportFileType``, until the attributes say.
 RESIN_SUFFIXES: Final = (".ctb", ".goo")
+
+#: Seconds an upload is given to leave ``CurrentStatus`` 2; a Saturn took about 9 s for 13.5 MB.
+UPLOAD_CHECK_TIMEOUT: Final = 60.0
+#: Seconds between two status reads while the printer checks an uploaded file.
+UPLOAD_CHECK_INTERVAL: Final = 1.0
 
 #: Seconds between two camera opens, so a retry or a still cannot stack RTSP sessions.
 VIDEO_SPACING: Final = 10.0
@@ -552,14 +561,15 @@ class SdcpResinProtocol(SdcpSession):
         response = await self._async_send_checked("delete_files", {"FileList": [path], "FolderList": []})
         failed = (response or {}).get("ErrData")
         folder = path.rsplit("/", 1)[0] or "/"
-        kept = any(item.path == path for item in await self._async_list_after_delete(path, folder))
+        listed = await self._async_list_to_confirm(f"the delete of {path}", folder)
+        kept = any(item.path == path for item in listed)
         if kept or (isinstance(failed, list) and path in failed):
             raise CommandRejectedError(
                 f"the printer did not delete {path}", reason="the file is still on the printer"
             )
 
-    async def _async_list_after_delete(self, path: str, folder: str) -> list[FileEntry]:
-        """List the folder a delete touched, and raise when no list arrives,
+    async def _async_list_to_confirm(self, what: str, folder: str) -> list[FileEntry]:
+        """List the folder a delete or an upload touched, and raise when no list arrives,
         since a missing list would read as a folder without the file."""
         self._file_list_event.clear()
         self._file_list = []
@@ -570,7 +580,7 @@ class SdcpResinProtocol(SdcpSession):
                 await asyncio.wait_for(self._file_list_event.wait(), timeout=sdcp.PUSH_TIMEOUT)
         if ack or not self._file_list_event.is_set():
             raise CommandRejectedError(
-                f"could not confirm the delete of {path}",
+                f"could not confirm {what}",
                 code=ack or None,
                 reason="the printer did not list the folder afterwards",
             )
@@ -579,8 +589,8 @@ class SdcpResinProtocol(SdcpSession):
     async def async_upload_file(
         self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None
     ) -> FileEntry:
-        """Post one file in chunks, as the Centauri does, once it is a type the printer prints
-        and the machine is idle; a busy one may be printing or taking another file."""
+        """Post one file in chunks, once it is a type the printer prints and the machine is idle,
+        and return it only once the printer lists it after checking it."""
         suffixes = self.upload_suffixes
         if not name.lower().endswith(suffixes):
             raise CommandRejectedError(
@@ -591,7 +601,36 @@ class SdcpResinProtocol(SdcpSession):
             raise CommandRejectedError(
                 "the printer takes a file only while it is idle", reason="the printer is not idle"
             )
-        return await super().async_upload_file(name, stream, size=size)
+        sent = await super().async_upload_file(name, stream, size=size)
+        return await self._async_confirm_upload(sent)
+
+    async def _async_confirm_upload(self, sent: FileEntry) -> FileEntry:
+        """Wait for the printer to leave ``CurrentStatus`` 2, then find the file in its folder:
+        a Saturn answers every upload as stored and silently discards a file it cannot print."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + UPLOAD_CHECK_TIMEOUT
+        while True:
+            await self._async_refresh_status()
+            flags = status_flags(self._status.get("CurrentStatus"))
+            if self._status_event.is_set() and flags and TRANSFERRING not in flags:
+                break
+            if loop.time() >= deadline:
+                raise UnreachableError(
+                    f"the printer was still taking {sent.name} {UPLOAD_CHECK_TIMEOUT:g} s after the "
+                    "upload; list its files to see whether it kept it"
+                )
+            await asyncio.sleep(min(UPLOAD_CHECK_INTERVAL, max(deadline - loop.time(), 0.0)))
+        folder = sent.path.rsplit("/", 1)[0] or "/"
+        listed = await self._async_list_to_confirm(f"the upload of {sent.path}", folder)
+        entry = next((item for item in listed if item.path == sent.path), None)
+        if entry is None:
+            raise CommandRejectedError(
+                f"the printer discarded {sent.name}: it checks each file it is sent and keeps only "
+                "one it can print",
+                reason="the printer discarded the file",
+            )
+        # The list names a file by its path and gives no size.
+        return replace(entry, name=sent.name, size=sent.size if entry.size is None else entry.size)
 
     # ----------------------------------------------------------------- camera
 

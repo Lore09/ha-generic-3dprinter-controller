@@ -106,6 +106,12 @@ class FakeResinPrinter:
         #: The ``code`` an upload chunk is answered with; ``None`` answers with a bare page.
         self.upload_code: str | None = "000000"
         self._transfers: dict[str, bytearray] = {}
+        #: Seconds ``CurrentStatus`` holds 2 after an upload's last chunk, as the printer checks
+        #: the file (measured: about 9 s); 0 stores it at once.
+        self.transfer_window = 0.0
+        #: Discard each uploaded file after its check, as the Saturn did a .goo of junk bytes.
+        self.discard_uploads = False
+        self._checks: set[asyncio.Task[None]] = set()
 
         self.url = ""
         self._sockets: set = set()
@@ -137,6 +143,8 @@ class FakeResinPrinter:
 
     async def stop(self) -> None:
         """Close every socket, then the server."""
+        for task in list(self._checks):
+            task.cancel()
         await self._close_all()
         if self._runner is not None:
             with suppress(Exception):
@@ -257,7 +265,7 @@ class FakeResinPrinter:
 
     async def _upload(self, request):
         """Take one chunk of the spec's form (en.md:1017-1021); the last one stores the file
-        in ``/local`` when its MD5 matches."""
+        in ``/local`` when its MD5 matches and its check, if any, passes."""
         from aiohttp import web
 
         fields: dict[str, Any] = {}
@@ -277,9 +285,27 @@ class FakeResinPrinter:
         body.extend(fields["File"])
         if len(body) >= int(fields["TotalSize"]):
             del self._transfers[fields["Uuid"]]
-            if hashlib.md5(body).hexdigest() == fields["S-File-MD5"]:  # noqa: S324
-                self.files.append({"name": f"/local/{fields['filename']}", "type": 1})
+            matches = hashlib.md5(body).hexdigest() == fields["S-File-MD5"]  # noqa: S324
+            entry = {"name": f"/local/{fields['filename']}", "type": 1}
+            kept = entry if matches and not self.discard_uploads else None
+            if self.transfer_window:
+                self.status["CurrentStatus"] = [2, 8]
+                task = asyncio.create_task(self._async_check_upload(kept))
+                self._checks.add(task)
+                task.add_done_callback(self._checks.discard)
+            elif kept is not None:
+                self.files.append(kept)
+        # Measured: a file the printer then discards is answered as stored all the same.
         return web.json_response({"code": "000000", "messages": None, "data": None, "success": True})
+
+    async def _async_check_upload(self, kept: dict[str, Any] | None) -> None:
+        """Hold ``CurrentStatus`` [2, 8], then [2], through the window; then keep or drop the file."""
+        await asyncio.sleep(self.transfer_window / 2)
+        self.status["CurrentStatus"] = [2]
+        await asyncio.sleep(self.transfer_window / 2)
+        if kept is not None:
+            self.files.append(kept)
+        self.status["CurrentStatus"] = [0]
 
     def _envelope_ok(self, frame: dict[str, Any], inner: dict[str, Any]) -> bool:
         """Return whether a request carries the envelope the capture used."""

@@ -230,8 +230,9 @@ reported as the printer's errors.
 | 128 | start print, opted in | `{"Filename": <bare name>, "StartLayer": 0}` | spec (en.md:370-390), cuprum, huygens; Ack 0 on a 16K V1.5.6 per source 2 |
 | 386 | video, opted in | `{"Enable": 1}` or `{"Enable": 0}` | spec (en.md:883-921) |
 
-None of 128, 129, 130, 131, 259 or 386 has been sent to a printer by this project
-yet. Around them:
+None of 128, 129, 130, 131 or 386 has been sent to a printer by this project yet.
+259 `{"FileList": ["/local/<file>"], "FolderList": []}` deleted an uploaded file on a
+16K V1.5.6, and the list afterwards confirmed it. Around them:
 
 * **Delete** lists the file's folder afterwards and reports a failure while the file
   is still there, or when no list comes back, since the `Ack` alone says nothing.
@@ -255,7 +256,14 @@ used), in the Centauri's chunked form of 1 MiB parts with the file's MD5. A part
 counts only when the printer answers with code `000000`. Only files whose suffix
 the printer names in `SupportFileType` are taken, `.ctb` and `.goo` on the 16K, and
 only while the machine is idle. The integration's upload view caps a file at 256
-MiB. Not yet measured.
+MiB.
+
+The printer answers `000000` before it has checked the file. On a 16K V1.5.6 a 13.5
+MB `.goo` held `CurrentStatus` [2] for about 9 seconds, then [0], and was listed in
+`/local`; 3.8 KB of junk bytes named `.goo` got the same reply and the same window,
+and was never listed. So after the last part the integration reads the status every
+second, for up to 60 seconds, until it leaves 2, then lists `/local` and reports the
+upload only when the file is there, and otherwise that the printer discarded it.
 
 ## Camera
 
@@ -304,8 +312,7 @@ seconds and the machine's real size. The integration does not read it.
 
 ## Still to verify
 
-The discovery reply's shape; the camera; an upload; pause, resume, stop, delete and
-start print; the phases through a real job and whether a printing Saturn pushes its
+The discovery reply's shape; the camera; pause, resume, stop and start print; the phases through a real job and whether a printing Saturn pushes its
 status; what `HeatStatus` means; and every model other than the 16K. The Saturn 4
 Ultra and the Mars 5 Ultra are named by source 4, have no vat reading here, and are
 marked unverified.

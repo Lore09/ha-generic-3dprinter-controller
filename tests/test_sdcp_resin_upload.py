@@ -1,5 +1,5 @@
 """Uploads to a fake Saturn: the chunked form on the socket's own port, only its own file
-types, only while idle, and a stored file only when the printer says so."""
+types, only while idle, and a stored file only when the printer lists it after its check."""
 
 from __future__ import annotations
 
@@ -11,12 +11,13 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from custom_components.generic_3dprinter.adapters import sdcp
+from custom_components.generic_3dprinter.adapters import sdcp, sdcp_resin
 from custom_components.generic_3dprinter.adapters.sdcp_resin import RESIN_SUFFIXES, SdcpResinProtocol
 from custom_components.generic_3dprinter.const import Capability
 from custom_components.generic_3dprinter.protocols import (
     UPLOAD_SUFFIXES,
     CommandRejectedError,
+    UnreachableError,
     parse_config,
 )
 from custom_components.generic_3dprinter.registry import build_adapter
@@ -99,6 +100,78 @@ async def test_a_large_file_goes_in_chunks_of_one_transfer(
     assert len({item["Uuid"] for item in uploads}) == 1
     assert {item["S-File-MD5"] for item in uploads} == {hashlib.md5(body).hexdigest()}  # noqa: S324
     assert "/local/part.ctb" in _local(resin_printer)
+    await adapter.async_teardown()
+
+
+# ----------------------------------------------------------------- the printer's check
+
+
+@pytest.fixture(name="quick_check")
+def quick_check_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sdcp_resin, "UPLOAD_CHECK_INTERVAL", 0.02)
+
+
+@pytest.mark.usefixtures("quick_check")
+async def test_an_upload_returns_once_the_printer_has_checked_and_listed_the_file(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """Measured: CurrentStatus holds 2 for about 9 s after a valid .goo, then 0, then it is listed."""
+    resin_printer.transfer_window = 0.3
+    adapter = _adapter(resin_printer.port, session)
+    await adapter.async_read()
+    before = len(resin_printer.sent_commands)
+    body = b"GOO sliced layers"
+    entry = await adapter.async_upload_file("part.goo", _chunks(body))
+
+    assert (entry.name, entry.path, entry.size) == ("part.goo", "/local/part.goo", len(body))
+    assert resin_printer.status["CurrentStatus"] == [0]
+    after = resin_printer.sent_commands[before:]
+    # Several status reads saw the check running, then the folder was listed once.
+    assert after.count(0) >= 3 and after[-1] == 258 and after.count(258) == 1
+    assert "/local/part.goo" in _local(resin_printer)
+    await adapter.async_teardown()
+
+
+@pytest.mark.usefixtures("quick_check")
+@pytest.mark.parametrize("window", [0.0, 0.2])
+async def test_a_file_the_printer_discards_after_its_check_is_no_upload(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, window: float
+) -> None:
+    """Measured: 3.8 KB of junk named .goo was answered as stored, then never listed."""
+    resin_printer.transfer_window = window
+    resin_printer.discard_uploads = True
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(CommandRejectedError, match="discarded part.goo") as caught:
+        await adapter.async_upload_file("part.goo", _chunks(b"\x00junk" * 700))
+    assert caught.value.reason == "the printer discarded the file"
+    assert len(resin_printer.uploads) == 1
+    assert "/local/part.goo" not in _local(resin_printer)
+    assert resin_printer.sent_commands[-1] == 258
+    await adapter.async_teardown()
+
+
+@pytest.mark.usefixtures("quick_check")
+async def test_a_check_that_never_ends_is_a_clear_error(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp_resin, "UPLOAD_CHECK_TIMEOUT", 0.2)
+    resin_printer.transfer_window = 30.0
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(UnreachableError, match=r"still taking part\.goo 0\.2 s after the upload"):
+        await adapter.async_upload_file("part.goo", _chunks(b"GOO"))
+    assert resin_printer.status["CurrentStatus"] == [2, 8]
+    assert 258 not in resin_printer.sent_commands
+    await adapter.async_teardown()
+
+
+async def test_a_folder_list_that_never_comes_leaves_the_upload_unconfirmed(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.1)
+    resin_printer.withhold_file_list = True
+    adapter = _adapter(resin_printer.port, session)
+    with pytest.raises(CommandRejectedError, match="could not confirm the upload of /local/part.goo"):
+        await adapter.async_upload_file("part.goo", _chunks(b"GOO"))
     await adapter.async_teardown()
 
 

@@ -285,7 +285,7 @@ async def test_a_file_the_printer_names_in_errdata_is_refused(
         return []
 
     monkeypatch.setattr(adapter, "_async_send_checked", answer)
-    monkeypatch.setattr(adapter, "_async_list_after_delete", empty)
+    monkeypatch.setattr(adapter, "_async_list_to_confirm", empty)
     with pytest.raises(CommandRejectedError, match="did not delete"):
         await adapter._async_dispatch(Command.DELETE_FILE, {"filename": CAPTURED_FILE})  # noqa: SLF001
 
