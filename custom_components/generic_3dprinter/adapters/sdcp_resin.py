@@ -160,6 +160,9 @@ UPLOAD_CHECK_INTERVAL: Final = 1.0
 VIDEO_SPACING: Final = 10.0
 #: The camera is not opened before this layer: the first layers are the ones a hang would ruin.
 VIDEO_MIN_LAYER: Final = 3
+#: Seconds a still is handed out again instead of opening the camera, which costs an RTSP
+#: session: Home Assistant asks every 10 s while a dashboard shows it, the timelapse per layer.
+STILL_MAX_AGE: Final = 60.0
 
 #: ``PrintInfo.ErrorNumber`` (spec en.md:206-218).
 PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
@@ -368,6 +371,11 @@ class SdcpResinProtocol(SdcpSession):
         #: Whether 386 ``Enable: 1`` went out with no ``Enable: 0`` after it.
         self._video_on = False
         self._video_opened_at: float | None = None
+        #: The last frame, from a still or the stream, and when it came.
+        self._still: bytes | None = None
+        self._still_at: float | None = None
+        #: The live stream's latest frame; ``None`` while no stream has produced one.
+        self._stream_frame: bytes | None = None
 
     # ------------------------------------------------------------ config flow
 
@@ -635,24 +643,43 @@ class SdcpResinProtocol(SdcpSession):
     # ----------------------------------------------------------------- camera
 
     async def async_camera_frame(self) -> bytes:
-        """Return one JPEG from the camera, opening it for that frame alone."""
+        """Return one JPEG: the live stream's latest, else a still younger than
+        :data:`STILL_MAX_AGE`, else a new one from the camera opened for that frame alone."""
+        self._require_camera()
+        if self._stream_frame is not None:
+            return self._stream_frame
+        if self._still is not None and self._still_at is not None:
+            if time.monotonic() - self._still_at < STILL_MAX_AGE:
+                return self._still
         async with self._async_video(still=True) as reader, aclosing(reader.async_frames()) as frames:
             async for frame in frames:
+                self._keep_frame(frame)
                 return frame
         raise UnreachableError("the camera ended before a whole frame arrived")
 
     async def async_camera_stream(self) -> AsyncIterator[bytes]:
         """Yield JPEG frames while the caller reads; the camera hub is the only caller."""
         async with self._async_video(still=False) as reader, aclosing(reader.async_frames()) as frames:
-            async for frame in frames:
-                yield frame
+            try:
+                async for frame in frames:
+                    self._keep_frame(frame)
+                    self._stream_frame = frame
+                    yield frame
+            finally:
+                self._stream_frame = None
+
+    def _keep_frame(self, frame: bytes) -> None:
+        self._still, self._still_at = frame, time.monotonic()
+
+    def _require_camera(self) -> None:
+        if Capability.CAMERA not in self.capabilities:
+            raise UnreachableError("the camera is off until it is allowed in the printer's options")
 
     @asynccontextmanager
     async def _async_video(self, *, still: bool) -> AsyncIterator[RtspFrames]:
         """Hold the camera from 386 to its release; refuse at once while it is held,
         since each wait would end in another of the printer's two RTSP sessions."""
-        if Capability.CAMERA not in self.capabilities:
-            raise UnreachableError("the camera is off until it is allowed in the printer's options")
+        self._require_camera()
         if self._video_lock.locked() or (self._video_release is not None and not self._video_release.done()):
             raise UnreachableError("the camera is already open")
         async with self._video_lock:

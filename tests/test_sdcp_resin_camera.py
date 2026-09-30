@@ -11,7 +11,7 @@ from typing import Any
 import aiohttp
 import pytest
 
-from custom_components.generic_3dprinter.adapters import rtsp_frames, sdcp
+from custom_components.generic_3dprinter.adapters import rtsp_frames, sdcp, sdcp_resin
 from custom_components.generic_3dprinter.adapters.rtsp_frames import RtspFrames, ffmpeg_args
 from custom_components.generic_3dprinter.adapters.sdcp_resin import SdcpResinProtocol
 from custom_components.generic_3dprinter.const import Capability
@@ -22,6 +22,7 @@ from tests.fake_resin_printer import FakeResinPrinter, load_fixture
 
 SATURN = load_fixture()["attributes"]["Attributes"]["MainboardID"]
 JPEG = b"\xff\xd8frame\xff\xd9"
+STREAMED = b"\xff\xd8streamed\xff\xd9"
 #: The printer names itself in VideoUrl; the adapter must reach it at the entry's address.
 REACHED_URL = "rtsp://127.0.0.1:554/video"
 
@@ -355,8 +356,9 @@ async def test_the_camera_waits_for_layer_3_of_a_print(
 
 
 async def test_a_second_open_within_10_s_is_refused_before_the_wire(
-    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(sdcp_resin, "STILL_MAX_AGE", 0.0)
     spawner = Spawner(resin_printer)
     adapter = _adapter(resin_printer, session, spawner)
     await adapter.async_camera_frame()
@@ -398,21 +400,68 @@ async def test_a_refused_enable_says_why_and_is_switched_off(
     await adapter.async_teardown()
 
 
-async def test_a_still_during_a_live_stream_is_refused_and_the_hub_keeps_its_frame(
-    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+async def test_two_stills_within_a_minute_open_the_camera_once(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    spawner = Spawner(resin_printer, frames=(JPEG,))
+    """Home Assistant asks for a still every 10 s while a dashboard shows the camera."""
+    assert sdcp_resin.STILL_MAX_AGE == 60.0
+    spawner = Spawner(resin_printer)
+    adapter = _adapter(resin_printer, session, spawner)
+    assert await adapter.async_camera_frame() == JPEG
+    sent = list(resin_printer.sent_commands)
+    for _ in range(3):
+        assert await adapter.async_camera_frame() == JPEG
+    assert resin_printer.sent_commands == sent
+    assert len(spawner.processes) == 1
+
+    # Once the still is older than STILL_MAX_AGE, the next one opens the camera again.
+    monkeypatch.setattr(sdcp_resin, "STILL_MAX_AGE", 0.2)
+    monkeypatch.setattr(sdcp_resin, "VIDEO_SPACING", 0.1)
+    await asyncio.sleep(0.25)
+    spawner.frames = (STREAMED,)
+    assert await adapter.async_camera_frame() == STREAMED
+    assert len(spawner.processes) == 2
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}] * 2
+    await adapter.async_teardown()
+
+
+async def test_a_still_during_a_stream_without_a_frame_yet_is_refused(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp_resin, "STILL_MAX_AGE", 0.0)
+    spawner = Spawner(resin_printer, frames=())
+    adapter = _adapter(resin_printer, session, spawner)
+    stream = adapter.async_camera_stream()
+    waiting = asyncio.create_task(anext(stream))
+    for _ in range(100):
+        if spawner.processes:
+            break
+        await asyncio.sleep(0.01)
+    with pytest.raises(UnreachableError, match="already open"):
+        await adapter.async_camera_frame()
+    spawner.processes[0].feed(STREAMED)
+    assert await asyncio.wait_for(waiting, 5) == STREAMED
+    assert await adapter.async_camera_frame() == STREAMED
+    await stream.aclose()
+    assert len(spawner.processes) == 1
+    await adapter.async_teardown()
+
+
+async def test_a_still_during_a_live_stream_is_its_latest_frame_and_opens_nothing(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sdcp_resin, "STILL_MAX_AGE", 0.0)
+    spawner = Spawner(resin_printer, frames=(STREAMED,))
     adapter = _adapter(resin_printer, session, spawner)
     await adapter.async_read()
     hub = CameraHub(adapter)
     viewer = hub.async_subscribe()
-    assert await asyncio.wait_for(anext(viewer), 5) == JPEG
+    assert await asyncio.wait_for(anext(viewer), 5) == STREAMED
     sent = list(resin_printer.sent_commands)
 
-    with pytest.raises(UnreachableError, match="already open"):
-        await adapter.async_camera_frame()
+    assert await adapter.async_camera_frame() == STREAMED
     hub._last_frame_at = 0.0  # noqa: SLF001 - the cached frame is stale, so the hub asks for a still
-    assert await hub.async_refresh_frame() == JPEG
+    assert await hub.async_refresh_frame() == STREAMED
     assert resin_printer.sent_commands == sent
     assert len(spawner.processes) == 1
 

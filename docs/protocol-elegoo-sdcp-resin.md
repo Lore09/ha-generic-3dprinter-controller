@@ -289,6 +289,9 @@ So the camera is an opt-in, and the integration relays JPEG frames from one ffmp
 4. It stops ffmpeg with `q`, then SIGTERM, waiting 5 seconds each, so ffmpeg sends
    its `TEARDOWN`, and kills it only as a last resort with a warning. Then it sends
    386 `Enable: 0`. Unloading the entry does the same over the open socket.
+5. A still is handed out again for 60 seconds instead of opening the camera, since
+   Home Assistant asks for one every 10 seconds while a dashboard shows it and the
+   timelapse asks once a layer; while a live view runs, a still is its latest frame.
 
 ## History
 
