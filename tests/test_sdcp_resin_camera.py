@@ -14,7 +14,7 @@ import pytest
 from custom_components.generic_3dprinter.adapters import rtsp_frames, sdcp, sdcp_resin
 from custom_components.generic_3dprinter.adapters.rtsp_frames import RtspFrames, ffmpeg_args
 from custom_components.generic_3dprinter.adapters.sdcp_resin import SdcpResinProtocol
-from custom_components.generic_3dprinter.const import Capability
+from custom_components.generic_3dprinter.const import DEFAULT_SCAN_INTERVAL, Capability
 from custom_components.generic_3dprinter.protocols import CommandRejectedError, UnreachableError, parse_config
 from custom_components.generic_3dprinter.registry import build_adapter
 from custom_components.generic_3dprinter.runtime import CameraHub
@@ -400,11 +400,11 @@ async def test_a_refused_enable_says_why_and_is_switched_off(
     await adapter.async_teardown()
 
 
-async def test_two_stills_within_a_minute_open_the_camera_once(
+async def test_two_stills_within_20_s_open_the_camera_once(
     resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Home Assistant asks for a still every 10 s while a dashboard shows the camera."""
-    assert sdcp_resin.STILL_MAX_AGE == 60.0
+    assert sdcp_resin.STILL_MAX_AGE == 20.0
     spawner = Spawner(resin_printer)
     adapter = _adapter(resin_printer, session, spawner)
     assert await adapter.async_camera_frame() == JPEG
@@ -418,6 +418,31 @@ async def test_two_stills_within_a_minute_open_the_camera_once(
     monkeypatch.setattr(sdcp_resin, "STILL_MAX_AGE", 0.2)
     monkeypatch.setattr(sdcp_resin, "VIDEO_SPACING", 0.1)
     await asyncio.sleep(0.25)
+    spawner.frames = (STREAMED,)
+    assert await adapter.async_camera_frame() == STREAMED
+    assert len(spawner.processes) == 2
+    assert _video(resin_printer) == [{"Enable": 1}, {"Enable": 0}] * 2
+    await adapter.async_teardown()
+
+
+async def test_a_timelapse_frame_a_poll_later_is_a_new_image(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
+) -> None:
+    """The timelapse asks once a poll; a still reused across polls would repeat in its video."""
+    assert 10.0 < sdcp_resin.STILL_MAX_AGE < DEFAULT_SCAN_INTERVAL
+    spawner = Spawner(resin_printer)
+    adapter = _adapter(resin_printer, session, spawner)
+    assert await adapter.async_camera_frame() == JPEG
+
+    # A dashboard's next ask, 10 s on, gets the same still.
+    adapter._still_at -= 10.0  # noqa: SLF001
+    adapter._video_opened_at -= 10.0  # noqa: SLF001
+    assert await adapter.async_camera_frame() == JPEG
+    assert len(spawner.processes) == 1
+
+    # The next poll, 30 s after the still, opens the camera again.
+    adapter._still_at -= DEFAULT_SCAN_INTERVAL - 10.0  # noqa: SLF001
+    adapter._video_opened_at -= DEFAULT_SCAN_INTERVAL - 10.0  # noqa: SLF001
     spawner.frames = (STREAMED,)
     assert await adapter.async_camera_frame() == STREAMED
     assert len(spawner.processes) == 2

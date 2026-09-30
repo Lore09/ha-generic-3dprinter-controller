@@ -3,6 +3,7 @@ types, only while idle, and a stored file only when the printer lists it after i
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import AsyncIterator
 from typing import Any
@@ -173,6 +174,64 @@ async def test_a_folder_list_that_never_comes_leaves_the_upload_unconfirmed(
     with pytest.raises(CommandRejectedError, match="could not confirm the upload of /local/part.goo"):
         await adapter.async_upload_file("part.goo", _chunks(b"GOO"))
     await adapter.async_teardown()
+
+
+async def _until(check: Any) -> None:
+    for _ in range(300):
+        if check():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the condition never held")
+
+
+@pytest.mark.parametrize("during", ["sleep", "status_read"])
+async def test_an_unload_during_the_check_ends_the_wait_without_reconnecting(
+    resin_printer: FakeResinPrinter, monkeypatch: pytest.MonkeyPatch, during: str
+) -> None:
+    """The entry unloads as the printer checks the file: teardown, then the session closes."""
+    monkeypatch.setattr(sdcp_resin, "UPLOAD_CHECK_INTERVAL", 0.3 if during == "sleep" else 0.02)
+    resin_printer.transfer_window = 30.0
+    session = aiohttp.ClientSession()
+    adapter = _adapter(resin_printer.port, session)
+    upload = asyncio.create_task(adapter.async_upload_file("part.goo", _chunks(b"GOO")))
+    await _until(lambda: bool(resin_printer.uploads))
+    if during == "status_read":
+        resin_printer.answer_delay[0] = 30.0
+    reads = resin_printer.sent_commands.count(0)
+    await _until(lambda: resin_printer.sent_commands.count(0) > reads)
+    if during == "sleep":
+        # The read's answer and push come at once; the wait is then in its 0.3 s sleep.
+        await asyncio.sleep(0.05)
+
+    await asyncio.wait_for(adapter.async_teardown(), 5)
+    await session.close()
+    with pytest.raises(UnreachableError, match=r"closed while it checked part\.goo; list its files"):
+        await asyncio.wait_for(upload, 5)
+
+    # A reconnect would greet the printer again; nothing reaches it after the unload.
+    sent = len(resin_printer.sent_commands)
+    await asyncio.sleep(0.4)
+    assert len(resin_printer.sent_commands) == sent
+    assert adapter._ws is None  # noqa: SLF001
+    assert 258 not in resin_printer.sent_commands
+
+
+async def test_a_cancelled_upload_stays_cancelled(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client that goes away cancels the view's task; that is no closed connection."""
+    monkeypatch.setattr(sdcp_resin, "UPLOAD_CHECK_INTERVAL", 0.02)
+    resin_printer.transfer_window = 30.0
+    adapter = _adapter(resin_printer.port, session)
+    upload = asyncio.create_task(adapter.async_upload_file("part.goo", _chunks(b"GOO")))
+    await _until(lambda: bool(resin_printer.uploads))
+    resin_printer.answer_delay[0] = 30.0
+    reads = resin_printer.sent_commands.count(0)
+    await _until(lambda: resin_printer.sent_commands.count(0) > reads)
+    upload.cancel()
+    await adapter.async_teardown()
+    with pytest.raises(asyncio.CancelledError):
+        await upload
 
 
 # ----------------------------------------------------------------- refusals

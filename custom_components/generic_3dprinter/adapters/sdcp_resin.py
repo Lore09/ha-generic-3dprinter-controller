@@ -160,9 +160,9 @@ UPLOAD_CHECK_INTERVAL: Final = 1.0
 VIDEO_SPACING: Final = 10.0
 #: The camera is not opened before this layer: the first layers are the ones a hang would ruin.
 VIDEO_MIN_LAYER: Final = 3
-#: Seconds a still is handed out again instead of opening the camera, which costs an RTSP
-#: session: Home Assistant asks every 10 s while a dashboard shows it, the timelapse per layer.
-STILL_MAX_AGE: Final = 60.0
+#: Seconds a still is handed out again instead of opening an RTSP session: past a dashboard's
+#: 10 s, short of the 30 s poll a timelapse frame comes with, so its frames do not repeat.
+STILL_MAX_AGE: Final = 20.0
 #: Seconds teardown waits for a camera open in progress to give up before it closes anyway.
 VIDEO_CLOSE_WAIT: Final = 15.0
 
@@ -190,6 +190,13 @@ def _check_open(use: _CameraUse) -> None:
     """Refuse to go on with a camera open that a teardown overtook."""
     if use.closing:
         raise UnreachableError("the printer's connection is closing")
+
+
+def _closed_during(sent: FileEntry) -> UnreachableError:
+    return UnreachableError(
+        f"the printer's connection closed while it checked {sent.name}; list its files to see "
+        "whether it kept it"
+    )
 
 
 def build_resin_frame(
@@ -390,6 +397,8 @@ class SdcpResinProtocol(SdcpSession):
         #: The camera use holding the lock, and whether a teardown is running.
         self._video_use: _CameraUse | None = None
         self._closing = False
+        #: Teardowns so far: a wait that spans one stops rather than reopen the socket.
+        self._teardowns = 0
         #: The last frame, from a still or the stream, and when it came.
         self._still: bytes | None = None
         self._still_at: float | None = None
@@ -634,9 +643,22 @@ class SdcpResinProtocol(SdcpSession):
     async def _async_confirm_upload(self, sent: FileEntry) -> FileEntry:
         """Wait for the printer to leave ``CurrentStatus`` 2, then find the file in its folder:
         a Saturn answers every upload as stored and silently discards a file it cannot print."""
+        teardowns = self._teardowns
+        try:
+            return await self._async_await_kept(sent, teardowns)
+        except (asyncio.CancelledError, ProtocolError):
+            # A teardown fails or cancels the pending read; a cancel of this task goes on as one.
+            task = asyncio.current_task()
+            if self._teardowns == teardowns or (task is not None and task.cancelling()):
+                raise
+            raise _closed_during(sent) from None
+
+    async def _async_await_kept(self, sent: FileEntry, teardowns: int) -> FileEntry:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + UPLOAD_CHECK_TIMEOUT
         while True:
+            if self._teardowns != teardowns:
+                raise _closed_during(sent)
             await self._async_refresh_status()
             flags = status_flags(self._status.get("CurrentStatus"))
             if self._status_event.is_set() and flags and TRANSFERRING not in flags:
@@ -647,6 +669,8 @@ class SdcpResinProtocol(SdcpSession):
                     "upload; list its files to see whether it kept it"
                 )
             await asyncio.sleep(min(UPLOAD_CHECK_INTERVAL, max(deadline - loop.time(), 0.0)))
+        if self._teardowns != teardowns:
+            raise _closed_during(sent)
         folder = sent.path.rsplit("/", 1)[0] or "/"
         listed = await self._async_list_to_confirm(f"the upload of {sent.path}", folder)
         entry = next((item for item in listed if item.path == sent.path), None)
@@ -785,6 +809,7 @@ class SdcpResinProtocol(SdcpSession):
         """Let a camera open in progress give up, release the camera over the open socket,
         then close it. Idempotent."""
         self._closing = True
+        self._teardowns += 1
         try:
             use = self._video_use
             if use is not None:

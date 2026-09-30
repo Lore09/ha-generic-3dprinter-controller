@@ -264,6 +264,8 @@ MB `.goo` held `CurrentStatus` [2] for about 9 seconds, then [0], and was listed
 and was never listed. So after the last part the integration reads the status every
 second, for up to 60 seconds, until it leaves 2, then lists `/local` and reports the
 upload only when the file is there, and otherwise that the printer discarded it.
+Unloading the entry during that wait ends it with an error, without reopening the
+socket.
 
 ## Camera
 
@@ -290,9 +292,11 @@ So the camera is an opt-in, and the integration relays JPEG frames from one ffmp
    its `TEARDOWN`, and kills it only as a last resort with a warning. Then it sends
    386 `Enable: 0`. Unloading the entry does the same over the open socket, once an
    open in progress has given up, so no ffmpeg starts and no socket reopens after it.
-5. A still is handed out again for 60 seconds instead of opening the camera, since
-   Home Assistant asks for one every 10 seconds while a dashboard shows it and the
-   timelapse asks once a layer; while a live view runs, a still is its latest frame.
+5. A still is handed out again for 20 seconds instead of opening the camera, since
+   Home Assistant asks for one every 10 seconds while a dashboard shows it. The
+   timelapse asks once a layer, at most once a poll (30 seconds by default), so at
+   the default its frames never repeat; while a live view runs, a still is its
+   latest frame.
 
 ## History
 
