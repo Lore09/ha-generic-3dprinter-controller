@@ -1,5 +1,5 @@
-"""Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K. Read-only for now.
-It shares the socket with the Centauri Carbon adapter and can send only commands 0, 1 and 258."""
+"""Elegoo resin printers over SDCP V3, such as the Saturn 4 Ultra 16K. It shares the socket with
+the Centauri Carbon adapter, and sends only the reads, pause, resume, stop and delete."""
 
 from __future__ import annotations
 
@@ -17,7 +17,16 @@ import aiohttp
 from ..const import Capability, Command, ModelProfile, PrintState, ProtocolId, ResinPhase, UnsafeFeature
 from ..discovery import DISCOVERY_TIMEOUT, DiscoveryResult, async_probe_udp
 from ..models import FileEntry, Percent, PrinterSnapshot, ResinState, Seconds, Temps
-from ..protocols import ConfigError, PrinterConfig, ProtocolError, WrongPrinterError, valid_serial
+from ..protocols import (
+    DEFAULT_BLOCK_RULES,
+    BlockRule,
+    CommandRejectedError,
+    ConfigError,
+    PrinterConfig,
+    ProtocolError,
+    WrongPrinterError,
+    valid_serial,
+)
 from . import sdcp
 from .sdcp import (
     SDCP_DISCOVERY_PORT,
@@ -82,6 +91,40 @@ RETAINED_JOB_STATUS: Final = frozenset({8, 9})
 
 #: The states in which the job's progress, times and layers mean the job in hand.
 JOB_STATES: Final = frozenset({PrintState.PREPARING, PrintState.PRINTING, PrintState.PAUSED})
+
+#: The codes a resin printer is sent: the reads, then the job controls and delete (spec en.md:426-535).
+RESIN_COMMAND: Final[Mapping[str, int]] = MappingProxyType(
+    {**SESSION_COMMAND, "pause": 129, "stop": 130, "resume": 131, "delete_files": 259}
+)
+
+#: The job controls, each sent with an empty ``Data`` as the spec shows.
+CONTROL_COMMANDS: Final[Mapping[Command, str]] = MappingProxyType(
+    {Command.PAUSE: "pause", Command.RESUME: "resume", Command.STOP: "stop"}
+)
+
+#: The ``Ack`` codes start print and the video switch give their own meaning (spec en.md:410-423, 912).
+RESIN_ACK_MESSAGES: Final[Mapping[str, Mapping[int, str]]] = MappingProxyType(
+    {
+        "start_print": MappingProxyType(
+            {
+                3: "the file failed its MD5 check",
+                4: "the file could not be read",
+                5: "the file's resolution does not match the printer",
+                6: "the file's format is not one the printer knows",
+                7: "the file was sliced for another printer model",
+            }
+        ),
+        "video": MappingProxyType(
+            {
+                1: "every video stream the printer allows is in use",
+                2: "the printer has no camera",
+            }
+        ),
+    }
+)
+
+#: Where a file named without a folder is kept, as the file list names it.
+LOCAL_FOLDER: Final = "/local"
 
 #: ``PrintInfo.ErrorNumber`` (spec en.md:206-218).
 PRINT_ERRORS: Final[Mapping[int, str]] = MappingProxyType(
@@ -222,6 +265,12 @@ def parse_resin(status: Mapping[str, Any], attributes: Mapping[str, Any]) -> dic
     }
 
 
+def machine_busy(snapshot: PrinterSnapshot) -> bool:
+    """Return ``True`` unless the machine itself says it is idle.
+    It is busy for about 15 s after an upload, while its print state already reads idle."""
+    return snapshot.resin is None or snapshot.resin.machine != "idle"
+
+
 # ------------------------------------------------------------------ discovery
 
 
@@ -248,9 +297,15 @@ def _discovery_result(reply: Mapping[str, Any], sender: str) -> DiscoveryResult:
 
 
 class SdcpResinProtocol(SdcpSession):
-    """An Elegoo resin printer on SDCP V3. It reads the printer and sends it no command yet."""
+    """An Elegoo resin printer on SDCP V3: it reads, pauses, resumes, stops and deletes files."""
 
-    commands = SESSION_COMMAND
+    commands = RESIN_COMMAND
+    command_ack_messages = RESIN_ACK_MESSAGES
+    #: A job starts only on an idle machine, whatever the print state says; then the defaults.
+    block_rules = (
+        BlockRule(frozenset({Command.START_PRINT}), when=machine_busy, reason="the printer is not idle"),
+        *DEFAULT_BLOCK_RULES,
+    )
 
     def __init__(
         self,
@@ -403,8 +458,27 @@ class SdcpResinProtocol(SdcpSession):
     # ---------------------------------------------------------------- commands
 
     async def _async_dispatch(self, command: Command, params: Mapping[str, Any]) -> None:
-        """Refuse every command: none is granted until it is measured on a printer."""
-        raise ProtocolError(f"the resin adapter cannot send {command.value} yet")
+        """Send pause, resume or stop with an empty ``Data``, or delete one file."""
+        if command is Command.DELETE_FILE:
+            await self._async_delete_file(str(params["filename"]))
+            return
+        name = CONTROL_COMMANDS.get(command)
+        if name is None:
+            raise ProtocolError(f"the resin adapter cannot send {command.value}")
+        await self._async_send_checked(name, {})
+
+    async def _async_delete_file(self, filename: str) -> None:
+        """Delete one file, then list its folder: the printer acks 0 even for a path it lacks,
+        so only the list says whether the file went."""
+        path = filename if filename.startswith("/") else f"{LOCAL_FOLDER}/{filename}"
+        response = await self._async_send_checked("delete_files", {"FileList": [path], "FolderList": []})
+        failed = (response or {}).get("ErrData")
+        folder = path.rsplit("/", 1)[0] or "/"
+        kept = any(item.path == path for item in await self._async_list_folder(folder))
+        if kept or (isinstance(failed, list) and path in failed):
+            raise CommandRejectedError(
+                f"the printer did not delete {path}", reason="the file is still on the printer"
+            )
 
     async def async_upload_file(
         self, name: str, stream: AsyncIterator[bytes], *, size: int | None = None

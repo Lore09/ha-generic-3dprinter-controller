@@ -40,6 +40,9 @@ EXPECTED = frozenset(
         "release_film",
         "vat_temperature",
         "vat_target_temperature",
+        "pause",
+        "resume",
+        "stop",
         "ip_address",
         "protocol",
         "firmware",
@@ -62,9 +65,6 @@ NEVER = (
     "filament",
     "camera",
     "timelapse",
-    "pause",
-    "resume",
-    "stop",
 )
 
 
@@ -161,7 +161,7 @@ async def test_a_saturn_entry_has_only_resin_entities(
     assert keys == EXPECTED
     assert not [key for key in keys for word in NEVER if word in key]
     assert not [item for item in er.async_entries_for_config_entry(registry, entry.entry_id)
-                if item.domain in ("number", "button", "switch", "camera")]
+                if item.domain in ("number", "switch", "camera")]
 
     phase = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_print_phase")
     assert hass.states.get(phase).state == "idle"
@@ -203,3 +203,17 @@ async def test_a_resin_entry_at_a_centauri_carbon_fails_for_good(hass: HomeAssis
         assert printer.sent_commands == [1]
     finally:
         await printer.stop()
+
+
+async def test_the_pause_button_sends_129_with_an_empty_data(
+    hass: HomeAssistant, resin_printer: FakeResinPrinter
+) -> None:
+    entry = _entry(hass, resin_printer.port, SATURN)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    button = er.async_get(hass).async_get_entity_id("button", DOMAIN, f"{entry.entry_id}_pause")
+    await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    acts = [(item["Cmd"], item["Data"]) for item in resin_printer.received if item["Cmd"] not in (0, 1, 258)]
+    assert acts == [(129, {})]
+    assert resin_printer.forbidden == []
+    assert await hass.config_entries.async_unload(entry.entry_id)

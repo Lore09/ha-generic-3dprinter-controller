@@ -163,8 +163,18 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
     ),
 )
 
-#: What every SDCP V3 resin printer reports: its state, phase, UV LED and film, and its files.
-_RESIN_BASE: Final = frozenset({Capability.FILE_LIST, Capability.RESIN_STATUS})
+#: What every SDCP V3 resin printer has: its state, phase, UV LED and film, its files,
+#: and pause, resume, stop and delete (spec en.md:426-535).
+_RESIN_BASE: Final = frozenset(
+    {
+        Capability.FILE_LIST,
+        Capability.RESIN_STATUS,
+        Capability.PAUSE,
+        Capability.RESUME,
+        Capability.STOP,
+        Capability.FILE_DELETE,
+    }
+)
 
 #: Each model by the ``MachineName`` it reports; a model with no vat heater has no vat reading.
 SDCP_RESIN_MODELS: Final[tuple[ModelProfile, ...]] = (
@@ -304,7 +314,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             id=ProtocolId.SDCP_RESIN,
             label="Elegoo resin (Saturn, Mars) – SDCP",
             adapter=_resolve(_ADAPTER_MODULES["sdcp_resin"], "SdcpResinProtocol"),  # type: ignore[arg-type]
-            # Read-only: no command is granted until it has been measured on a printer.
+            # No start print, upload or camera until each is measured on a printer.
             capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
             models=SDCP_RESIN_MODELS,
             fields=("port", "serial"),
@@ -319,11 +329,14 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                 "inferred": (
                     "the phase table and the print error codes come from the SDCP V3 spec, "
                     "and preheating (16) from Elegoo's SDK. Ticks are milliseconds, from the "
-                    "spec and a history entry whose begin and end match its ticks"
+                    "spec and a history entry whose begin and end match its ticks. Pause "
+                    "(129), resume (131), stop (130) and delete (259) follow the spec and "
+                    "alfiedennen/sdcp-saturn-4-ultra, which ran them on a 16K on V1.5.6; "
+                    "delete lists the folder afterwards, since 259 acks a missing path too"
                 ),
                 "absent": (
-                    "printing, pausing, stopping, uploading, deleting and the camera, until "
-                    "each is measured on a printer; the vat's target, which no command sets"
+                    "starting a print, uploading and the camera, until each is measured on "
+                    "a printer; the vat's target, which no command sets"
                 ),
             },
         ),

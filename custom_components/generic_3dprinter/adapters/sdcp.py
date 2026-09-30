@@ -441,6 +441,8 @@ class SdcpSession(Protocol):
     commands: Mapping[str, int] = SESSION_COMMAND
     #: What a nonzero ``Ack`` means, by code.
     ack_messages: Mapping[int, str] = ACK_MESSAGES
+    #: Codes one command means otherwise, by the command's name; the rest read ``ack_messages``.
+    command_ack_messages: Mapping[str, Mapping[int, str]] = MappingProxyType({})
 
     def __init__(
         self,
@@ -826,24 +828,32 @@ class SdcpSession(Protocol):
             self._ws = None
             self._reader = None
 
-    async def _async_send_checked(self, name: str, data: Mapping[str, Any]) -> None:
-        """Send a command and raise when the printer refuses it."""
+    async def _async_send_checked(
+        self, name: str, data: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        """Send a command, raise when the printer refuses it, and return its answer."""
         response = await self._async_request(self.commands[name], data)
         ack = _integer((response or {}).get("Ack"))
         if ack is not None and ack != 0:
+            reason = self.command_ack_messages.get(name, {}).get(ack, self.ack_messages.get(ack))
             raise CommandRejectedError(
-                f"the printer refused {name}: {self.ack_messages.get(ack, 'unrecognised reason')}",
+                f"the printer refused {name}: {reason or 'unrecognised reason'}",
                 code=ack,
-                reason=self.ack_messages.get(ack),
+                reason=reason,
             )
+        return response
 
     # ------------------------------------------------------------------ files
 
     async def async_list_files(self) -> Sequence[FileEntry]:
         """Return the files on the printer's internal storage."""
+        return await self._async_list_folder("/local")
+
+    async def _async_list_folder(self, url: str) -> list[FileEntry]:
+        """Return the files in one folder of the printer's storage, such as ``/local``."""
         self._file_list_event.clear()
         self._file_list = []
-        response = await self._async_request(self.commands["file_list"], {"Url": "/local"})
+        response = await self._async_request(self.commands["file_list"], {"Url": url})
 
         # Observed on hardware: the ack and the list are separate frames, so the
         # ack frame alone carries no files.

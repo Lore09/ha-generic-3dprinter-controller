@@ -1,5 +1,5 @@
 """A fake Saturn 4 Ultra 16K (V1.5.6) that sends only frames the real one sent, and "crashes"
-on any command or start-print payload the SDCP V3 spec does not give a resin printer."""
+on any command, or payload of a command that acts, the SDCP V3 spec does not give a resin printer."""
 
 from __future__ import annotations
 
@@ -18,6 +18,14 @@ FIXTURE = Path(__file__).parent / "fixtures" / "sdcp_saturn4u16k_v156_idle.json"
 ALLOWED = frozenset({0, 1, 128, 129, 130, 131, 258, 259, 320, 321, 386})
 #: The one start-print payload the spec defines.
 START_PRINT_KEYS = frozenset({"Filename", "StartLayer"})
+#: The ``Data`` keys the spec gives each command that changes something; any other shape crashes.
+PAYLOAD_KEYS: dict[int, frozenset[str]] = {
+    128: START_PRINT_KEYS,
+    129: frozenset(),
+    130: frozenset(),
+    131: frozenset(),
+    259: frozenset({"FileList", "FolderList"}),
+}
 
 #: A 16K mid-print, reported in elegoo-homeassistant issue #21 (TaskId shortened there).
 PRINTING_STATUS: dict[str, Any] = {
@@ -59,6 +67,12 @@ class FakeResinPrinter:
         self.mainboard: str = self.attributes["MainboardID"]
         #: The constant ``Id`` the printer puts on every frame it sends.
         self.brand_id: str = self.frames["status_ack"]["Id"]
+        #: Every file and folder on the printer, as command 258 names them.
+        self.files: list[dict[str, Any]] = list(self.frames["file_list"]["Data"]["Data"]["FileList"])
+        #: Ack a delete and keep the file, as a printer that failed to delete it would.
+        self.keep_deleted = False
+        #: The ``Ack`` to answer a command that acts with, by code; 0 when absent.
+        self.acks: dict[int, int] = {}
 
         #: Every request's ``Data``, and its command code, in arrival order.
         self.received: list[dict[str, Any]] = []
@@ -179,7 +193,7 @@ class FakeResinPrinter:
         self.received.append(inner)
         self.sent_commands.append(cmd)
 
-        if cmd not in ALLOWED or (cmd == 128 and set(data) != START_PRINT_KEYS):
+        if cmd not in ALLOWED or (cmd in PAYLOAD_KEYS and set(data) != PAYLOAD_KEYS[cmd]):
             self.crashed = True
             self.forbidden.append(cmd)
             await self._close_all()
@@ -202,7 +216,9 @@ class FakeResinPrinter:
             if not self.withhold_status:
                 await ws.send_str(self._push("status", "Status", self.status))
         elif cmd == 258:
-            await ws.send_str(self._response(cmd, request_id, self.frames["file_list"]["Data"]["Data"]))
+            folder = str(data.get("Url") or "")
+            listed = [item for item in self.files if item["name"].rsplit("/", 1)[0] == folder]
+            await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "FileList": listed}))
         elif cmd == 320:
             await ws.send_str(self._response(cmd, request_id, self.frames["history"]["Data"]["Data"]))
         elif cmd == 321:
@@ -217,7 +233,11 @@ class FakeResinPrinter:
                 await ws.send_str(self._response(cmd, request_id, {"Ack": 0, "VideoUrl": url}))
         else:
             # 259 answers Ack 0 even for a path that does not exist, as reported.
-            await ws.send_str(self._response(cmd, request_id, {"Ack": 0}))
+            ack = self.acks.get(cmd, 0)
+            if cmd == 259 and not ack and not self.keep_deleted:
+                gone = set(data["FileList"])
+                self.files = [item for item in self.files if item["name"] not in gone]
+            await ws.send_str(self._response(cmd, request_id, {"Ack": ack}))
 
     def _envelope_ok(self, frame: dict[str, Any], inner: dict[str, Any]) -> bool:
         """Return whether a request carries the envelope the capture used."""

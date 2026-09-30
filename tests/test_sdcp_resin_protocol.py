@@ -36,6 +36,13 @@ FIXTURE = load_fixture()
 IDLE_STATUS: dict[str, Any] = FIXTURE["status"]["Status"]
 ATTRIBUTES: dict[str, Any] = FIXTURE["attributes"]["Attributes"]
 SATURN = ATTRIBUTES["MainboardID"]
+#: The commands a resin printer is granted.
+CONTROLS = frozenset({Command.PAUSE, Command.RESUME, Command.STOP, Command.DELETE_FILE})
+#: What a Saturn 4 Ultra 16K is granted, and what every resin model has.
+BASE = frozenset(
+    {Capability.FILE_LIST, Capability.RESIN_STATUS, Capability.PAUSE, Capability.RESUME,
+     Capability.STOP, Capability.FILE_DELETE}
+)
 
 
 @pytest.fixture(name="session")
@@ -187,22 +194,22 @@ def test_an_empty_status_is_unknown() -> None:
 # ---------------------------------------------------------- what it can send
 
 
-def test_it_can_send_only_reads() -> None:
+def test_it_can_send_only_reads_and_the_job_controls() -> None:
     codes = set(SdcpResinProtocol.commands.values())
-    assert codes <= {0, 1, 128, 129, 130, 131, 258, 259, 386}
+    assert codes == {0, 1, 258, 129, 130, 131, 259}
     assert not codes & {324, 387, 403}
     for name in ("set_printer_params", "_async_read_canvas", "camera_url", "web_ui_url", "_async_enable_video"):
         assert not hasattr(SdcpResinProtocol, name), name
     assert not any(name.startswith("_async_set_") for name in dir(SdcpResinProtocol))
 
 
-async def test_every_command_is_refused_before_the_wire(
+async def test_every_command_but_the_controls_is_refused_before_the_wire(
     resin_printer: FakeResinPrinter, session: aiohttp.ClientSession
 ) -> None:
     adapter = _adapter(resin_printer.port, session)
     await adapter.async_read()
     before = list(resin_printer.sent_commands)
-    for command in Command:
+    for command in set(Command) - CONTROLS:
         with pytest.raises(UnsupportedCommandError):
             await adapter.async_send(command, **SAMPLE_PARAMS[command])
     with pytest.raises(ProtocolError):
@@ -256,7 +263,7 @@ async def test_a_read_of_the_idle_saturn(resin_printer: FakeResinPrinter, sessio
     snapshot = await adapter.async_read()
     assert snapshot.model == "Elegoo Saturn 4 Ultra 16K"
     assert adapter.model_id == "Saturn 4 Ultra 16K"
-    assert snapshot.capabilities == {Capability.FILE_LIST, Capability.RESIN_STATUS, Capability.VAT_SENSOR}
+    assert snapshot.capabilities == BASE | {Capability.VAT_SENSOR}
     assert (snapshot.firmware, snapshot.serial) == ("V1.5.6", SATURN)
     assert snapshot.print_state is PrintState.IDLE
     assert snapshot.progress is snapshot.elapsed is snapshot.current_layer is None
@@ -292,7 +299,7 @@ async def test_an_unknown_model_gets_what_every_model_has(
     resin_printer.attributes["MachineName"] = "Saturn 5 Ultra"
     adapter = _adapter(resin_printer.port, session)
     snapshot = await adapter.async_read()
-    assert snapshot.capabilities == {Capability.FILE_LIST, Capability.RESIN_STATUS}
+    assert snapshot.capabilities == BASE
     assert "unknown model Saturn 5 Ultra" in snapshot.errors
     await adapter.async_teardown()
 
