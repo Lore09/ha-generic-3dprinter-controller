@@ -146,23 +146,29 @@ def test_the_stdlib_verifier_classifies_resin_as_the_adapter_does(attributes: di
     assert verify_sdcp.is_resin(attributes) is (sdcp.classify_sdcp(flat, status) == "resin")
 
 
-async def _verify(monkeypatch: pytest.MonkeyPatch, port: int, raw: dict[str, Any], *argv: str) -> int:
-    """Run verify_sdcp against a loopback printer, found by a discovery that replies ``raw``."""
+async def _verify(
+    monkeypatch: pytest.MonkeyPatch, port: int, raw: dict[str, Any], *argv: str, flag: str = "--discover"
+) -> int:
+    """Run verify_sdcp against a loopback printer, found by a discovery that replies ``raw``.
+    An empty ``flag`` leaves out ``--discover``, so the tool discovers because no host was given."""
     data = raw["Data"]
     entry = {"host": "127.0.0.1", "mainboard_id": data.get("MainboardID"), "model": data.get("MachineName"),
              "firmware": data.get("FirmwareVersion"), "raw": raw}
     monkeypatch.setattr(verify_sdcp, "discover", lambda: [entry])
     monkeypatch.setattr(verify_sdcp, "WS_PORT", port)
     monkeypatch.setattr(verify_sdcp, "upload_file", _no_session)
-    monkeypatch.setattr(sys, "argv", ["verify_sdcp.py", "--discover", "--no-camera", "--period-ms", "100", *argv])
+    flags = [flag] if flag else []
+    monkeypatch.setattr(sys, "argv", ["verify_sdcp.py", *flags, "--no-camera", "--period-ms", "100", *argv])
     return await asyncio.to_thread(verify_sdcp.main)
 
 
-async def test_the_verifier_stops_at_a_resin_discovery_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("flag", ["--discover", ""], ids=["asked", "no_host"])
+async def test_the_verifier_stops_at_a_resin_discovery_reply(monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
     printer = FakeResinPrinter()
     url = await printer.start()
     try:
-        assert await _verify(monkeypatch, int(url.rsplit(":", 1)[1]), SATURN, "--upload", "x.goo") == 1
+        port = int(url.rsplit(":", 1)[1])
+        assert await _verify(monkeypatch, port, SATURN, "--upload", "x.goo", flag=flag) == 1
     finally:
         await printer.stop()
     assert printer.sent_commands == []

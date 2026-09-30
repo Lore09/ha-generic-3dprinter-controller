@@ -722,6 +722,7 @@ def main() -> int:
     args = parser.parse_args()
 
     host, mid = args.host, None
+    found: list[dict[str, Any]] = []
     if args.discover or not host:
         section("discovery: M99999 on UDP 3000")
         found = discover()
@@ -737,7 +738,8 @@ def main() -> int:
     if not host:
         log("no host to talk to")
         return 1
-    if args.discover and any(
+    # Any discovery reply counts, including the implicit one made when no --host was given.
+    if any(
         refuse_resin(host, entry["raw"].get("Data")) for entry in found if entry["host"] == host
     ):
         return 1
