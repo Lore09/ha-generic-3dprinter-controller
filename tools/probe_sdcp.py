@@ -8,7 +8,8 @@ integration does:
 
 It connects to ``ws://<host>:3030/websocket``, sends the read-only queries the
 printer's own web UI sends on load, prints every raw frame, and exits. It never
-sends a command that changes printer state.
+sends a command that changes printer state. It refuses a resin printer, which must
+never get command 324; that check imports the integration, as the acceptance tools do.
 
 Note on the wire format the printer expects: the request frame carries a bare
 ``Data`` object, but everything the printer *sends back* uses ``Topic`` values
@@ -24,6 +25,8 @@ import time
 import urllib.request
 import uuid
 from typing import Any
+
+from acceptance_kit import async_refuse_resin
 
 DEFAULT_PORT = 3030
 
@@ -98,6 +101,8 @@ def discover_mainboard_id(host: str) -> str:
 async def run(host: str, port: int, seconds: float) -> int:
     import aiohttp
 
+    if await async_refuse_resin(host):
+        return 1
     print(f"[1] HTTP discovery on {host}")
     mainboard_id = await asyncio.to_thread(discover_mainboard_id, host)
     print(f"    MainboardID = {mainboard_id or '(not exposed over HTTP; try an empty id)'}")

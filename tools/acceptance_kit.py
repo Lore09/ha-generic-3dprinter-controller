@@ -1,5 +1,5 @@
-"""What every hardware acceptance script shares: numbered checks, and ``--active`` steps
-confirmed before they run. Exit codes: 0 all passed, 1 a check failed, 2 bad usage."""
+"""What every hardware acceptance script shares: numbered checks, ``--active`` steps confirmed
+before they run, and the resin guard. Exit codes: 0 all passed, 1 a check failed, 2 bad usage."""
 
 from __future__ import annotations
 
@@ -66,3 +66,24 @@ def confirm(action: str, *, active: bool, assume_yes: bool) -> bool:
     if assume_yes:
         return True
     return input("    send it? [y/N] ").strip().lower() in ("y", "yes")
+
+
+async def async_refuse_resin(host: str, *, timeout: float = 3.0) -> bool:
+    """Print why and return True when ``host`` answers SDCP discovery as a resin printer.
+    The FDM tools check this first: a resin printer must never get their commands."""
+    use_repository()
+    from custom_components.generic_3dprinter import discovery
+    from custom_components.generic_3dprinter.adapters import sdcp
+
+    answer = await discovery.async_probe_udp(
+        sdcp.SDCP_DISCOVERY_PROBE, (host, sdcp.SDCP_DISCOVERY_PORT), timeout
+    )
+    identity = sdcp.sdcp_identity(answer[0]) if answer is not None else {}
+    if sdcp.classify_sdcp(identity) != "resin":
+        return False
+    model = identity.get("MachineName") or identity.get("Name") or "a resin printer"
+    print(
+        f"refused: {host} answers as {model}, a resin printer, and this tool sends FDM "
+        "commands. Use tools/acceptance_sdcp_resin.py instead"
+    )
+    return True

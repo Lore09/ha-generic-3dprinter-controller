@@ -6,9 +6,10 @@ the real lifecycle, and prints the normalised snapshot.
 
     python tools/acceptance_sdcp.py 192.168.128.143
 
-Read-only by default. ``--camera out.jpg`` also grabs one frame. Nothing that
-changes printer state is ever sent, and ``--frame-only`` prints the raw frames the
-adapter produces so the wire format can be inspected.
+Read-only by default, and it refuses an address that answers as a resin printer.
+``--camera out.jpg`` also grabs one frame. Nothing that changes printer state is
+ever sent, and ``--frame-only`` prints the raw frames the adapter produces so the
+wire format can be inspected.
 
 Exit codes: 0 all checks passed, 1 a check failed, 2 bad usage.
 """
@@ -21,10 +22,9 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "custom_components"))
+from acceptance_kit import Report, async_refuse_resin, use_repository
 
-from acceptance_kit import Report  # noqa: E402 - tools/ is the script's own directory
+use_repository()
 
 REPORT = Report()
 check = REPORT.check
@@ -33,9 +33,13 @@ check = REPORT.check
 async def run(host: str, camera_out: Path | None, keepalive: float) -> int:
     import aiohttp
 
-    from generic_3dprinter.protocols import ProtocolError, parse_config
-    from generic_3dprinter.registry import build_adapter, get_registration
-    from generic_3dprinter.const import Capability, Command, ProtocolId
+    from custom_components.generic_3dprinter.const import Capability, Command, ProtocolId
+    from custom_components.generic_3dprinter.protocols import ProtocolError, parse_config
+    from custom_components.generic_3dprinter.registry import build_adapter, get_registration
+
+    # Step [6] sends 386 and the adapter sends 324: never to a resin printer.
+    if await async_refuse_resin(host):
+        return 1
 
     config = parse_config(
         {

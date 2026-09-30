@@ -6,8 +6,8 @@ against real hardware and reports how many frames arrived and at what rate, so
 
     python tools/acceptance_camera.py 192.168.128.143
 
-Read-only. It pulls one upstream connection for the whole run, exactly as the
-integration does, so it can be run while a print is going.
+Read-only, and it refuses a resin printer. It pulls one upstream connection for
+the whole run, exactly as the integration does, so it can be run while a print is going.
 """
 
 from __future__ import annotations
@@ -18,10 +18,9 @@ import sys
 import time
 from pathlib import Path
 
-from acceptance_kit import Report
+from acceptance_kit import Report, async_refuse_resin, use_repository
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "custom_components"))
+use_repository()
 
 if sys.platform == "win32":
     # aiodns refuses the Proactor loop that Windows defaults to.
@@ -31,8 +30,11 @@ if sys.platform == "win32":
 async def run(host: str, seconds: float, camera_out: Path | None) -> int:
     import aiohttp
 
-    from generic_3dprinter.adapters import sdcp
+    from custom_components.generic_3dprinter.adapters import sdcp
 
+    # This reads the Centauri's MJPEG port; a resin printer's camera is RTSP, with two slots.
+    if await async_refuse_resin(host):
+        return 1
     config_host = host
     camera_url = f"http://{config_host}:{sdcp.DEFAULT_CAMERA_PORT}{sdcp.CAMERA_PATH}"
     print(f"[1] camera: {camera_url}")
