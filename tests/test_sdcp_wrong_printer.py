@@ -104,6 +104,28 @@ async def test_an_unanswered_command_one_closes_the_socket(
     await adapter.async_teardown()
 
 
+async def test_a_centauri_s_attributes_do_not_vouch_for_the_next_socket(
+    resin_printer: FakeResinPrinter, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Saturn that took the Centauri's address and is slow with its attributes is still refused."""
+    monkeypatch.setattr(sdcp, "PUSH_TIMEOUT", 0.2)
+    resin_printer.withhold_attributes = True
+    adapter = _adapter(resin_printer, session)
+    adapter._attributes = {  # noqa: SLF001
+        "MachineName": "Centauri Carbon",
+        "MainboardID": "5c44",
+        "SupportFileType": ["gcode"],
+    }
+    adapter._attributes_event.set()  # noqa: SLF001
+    with pytest.raises(WrongPrinterError):
+        await adapter.async_send(Command.SET_HOTEND_TEMP, **SAMPLE_PARAMS[Command.SET_HOTEND_TEMP])
+    assert 403 not in resin_printer.sent_commands
+    assert set(resin_printer.sent_commands) <= {0, 1}
+    assert resin_printer.forbidden == []
+    await _closed(resin_printer)
+    await adapter.async_teardown()
+
+
 def _framed(adapter: sdcp.SdcpProtocol) -> list[int]:
     """Record every command the adapter frames, whether or not the printer reads it."""
     framed: list[int] = []

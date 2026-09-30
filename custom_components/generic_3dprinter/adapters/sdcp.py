@@ -533,8 +533,6 @@ class SdcpSession(Protocol):
 
     async def _async_open(self) -> None:
         await self._reset_socket()
-
-        self._attributes_event.clear()
         try:
             # aiohttp's own ping is off: the printer expects the page's text "ping",
             # which the heartbeat task below sends.
@@ -591,7 +589,8 @@ class SdcpSession(Protocol):
             await asyncio.wait_for(self._attributes_event.wait(), timeout=PUSH_TIMEOUT)
         await self._check_identity()
 
-        self._mainboard_id = str(self._attributes.get("MainboardID") or "")
+        # The id only addresses requests, so a late push keeps the one said before.
+        self._mainboard_id = str(self._attributes.get("MainboardID") or "") or self._mainboard_id
         # Like the printer's own page, ask for the status on every connection. The
         # printer pushes it only when asked, so a status cached from before a power
         # cycle would otherwise be reported until somebody opened that page.
@@ -622,13 +621,16 @@ class SdcpSession(Protocol):
 
         The old socket is closed, not left behind. The printer holds five client
         slots, and a socket nobody reads keeps one of them until the printer times
-        it out a minute later. The status it delivered is dropped too, so what was
-        true before a power cycle is never reported as true after it.
+        it out a minute later. The status and attributes it delivered are dropped too,
+        so what was true before a power cycle, or of another printer at this address,
+        is never reported or trusted as true after it.
         """
         await self._async_close_socket()
         self._fail_pending(UnreachableError("the SDCP socket is not open"))
         self._status = {}
         self._status_at = None
+        self._attributes = {}
+        self._attributes_event.clear()
 
     async def _async_close_socket(self) -> None:
         """Stop the heartbeat and the reader and close the socket. Idempotent."""
