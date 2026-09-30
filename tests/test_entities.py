@@ -22,6 +22,7 @@ from custom_components.generic_3dprinter import binary_sensor as binary_sensor_p
 from custom_components.generic_3dprinter import button as button_platform
 from custom_components.generic_3dprinter import camera as camera_platform
 from custom_components.generic_3dprinter import number as number_platform
+from custom_components.generic_3dprinter import registry
 from custom_components.generic_3dprinter import sensor as sensor_platform
 from custom_components.generic_3dprinter import switch as switch_platform
 from custom_components.generic_3dprinter.const import (
@@ -32,6 +33,7 @@ from custom_components.generic_3dprinter.const import (
     LightChannel,
     PrintState,
     ProtocolId,
+    ResinPhase,
 )
 from custom_components.generic_3dprinter.coordinator import PrinterCoordinator
 from custom_components.generic_3dprinter.entity import (
@@ -42,6 +44,7 @@ from custom_components.generic_3dprinter.models import (
     Axis,
     Fans,
     PrinterSnapshot,
+    ResinState,
     Temps,
 )
 from custom_components.generic_3dprinter.protocols import PrinterConfig
@@ -726,3 +729,245 @@ async def test_granted_capabilities_answers_every_capability() -> None:
     assert granted[Capability.PAUSE] is True
     assert granted[Capability.STOP] is False
     assert set(granted) == set(Capability)
+
+
+#: The four sensors a resin printer has no reading for.
+NOZZLE_AND_BED = frozenset(
+    {
+        "nozzle_temperature",
+        "nozzle_target_temperature",
+        "bed_temperature",
+        "bed_target_temperature",
+    }
+)
+
+#: The sensors only a resin printer gets.
+RESIN_SENSORS = frozenset(
+    {
+        "print_phase",
+        "uv_led_temperature",
+        "release_film",
+        "vat_temperature",
+        "vat_target_temperature",
+    }
+)
+
+#: What a Saturn 4 Ultra 16K grants for its readings alone.
+RESIN_CAPABILITIES = frozenset(
+    {Capability.FILE_LIST, Capability.RESIN_STATUS, Capability.VAT_SENSOR}
+)
+
+#: Every key the snapshot document had before resin printers.
+FDM_SNAPSHOT_KEYS = frozenset(
+    {
+        "protocol",
+        "connected",
+        "print_state",
+        "capabilities",
+        "progress",
+        "current_layer",
+        "total_layers",
+        "remaining",
+        "elapsed",
+        "filename",
+        "job_id",
+        "speed_factor",
+        "flow_factor",
+        "hotend",
+        "bed",
+        "chamber",
+        "fans",
+        "position",
+        "homed_axes",
+        "lights",
+        "camera",
+        "filament",
+        "model",
+        "firmware",
+        "serial",
+        "errors",
+        "blocked",
+    }
+)
+
+
+def resin_snapshot(
+    capabilities: frozenset[Capability] = RESIN_CAPABILITIES,
+) -> PrinterSnapshot:
+    """Return the idle Saturn 4 Ultra 16K as it answered Cmd 0 and Cmd 1 on V1.5.6."""
+    return PrinterSnapshot(
+        protocol=ProtocolId.SDCP_CC1,
+        connected=True,
+        capabilities=capabilities,
+        print_state=PrintState.IDLE,
+        filename="SUP_allineatore_01_1_202609301434.goo",
+        resin=ResinState(
+            machine="idle",
+            phase=ResinPhase.IDLE,
+            phase_code=0,
+            uv_led=29.077695846557617,
+            vat=Temps(current=29.0, target=30.0),
+            vat_heat_status=1,
+            release_film=283,
+            release_film_max=60000,
+            printer_timelapse=False,
+            video_streams=0,
+            video_streams_max=2,
+        ),
+        model="Saturn 4 Ultra 16K",
+        firmware="V1.5.6",
+        serial="78070ac4ce6d0100",
+    )
+
+
+def _fdm_variants() -> dict[str, frozenset[Capability]]:
+    """Return every non-resin registration's grant, with and without opt-ins and per model."""
+    variants = {}
+    for item in registry.ADAPTERS.values():
+        if Capability.RESIN_STATUS in item.capabilities:
+            continue
+        name = item.id.value
+        variants[f"{name}-all"] = item.capabilities
+        variants[f"{name}-safe"] = registry.granted_capabilities(item, frozenset())
+        for model in item.models:
+            variants[f"{name}-{model.id}"] = item.capabilities & model.capabilities
+    return variants
+
+
+FDM_VARIANTS = _fdm_variants()
+
+
+@pytest.mark.parametrize("variant", list(FDM_VARIANTS))
+async def test_every_fdm_registration_keeps_its_sensors(variant: str) -> None:
+    """Resin support changes no existing printer: its heaters and layers stay, no resin sensor comes."""
+    capabilities = FDM_VARIANTS[variant]
+    granted = {item: item in capabilities for item in Capability}
+    keys = {item.key for item in sensor_platform.SENSOR_DESCRIPTIONS if item.gate(granted)}
+    assert NOZZLE_AND_BED <= keys
+    assert not keys & RESIN_SENSORS
+    job = bool({Capability.START_PRINT, Capability.PAUSE} & capabilities)
+    assert ("progress" in keys) is job
+    assert ("current_layer" in keys) is (Capability.FILE_UPLOAD in capabilities)
+    assert ("total_layers" in keys) is (Capability.FILE_UPLOAD in capabilities)
+
+
+async def test_a_resin_printer_has_no_nozzle_or_bed_sensor() -> None:
+    """RESIN_STATUS drops the four heater sensors and brings the resin ones, layers and progress."""
+    hass = make_hass()
+    collector = await collect(
+        hass, build_coordinator(hass, RESIN_CAPABILITIES), sensor_platform
+    )
+    keys = set(collector.keys())
+    assert not keys & NOZZLE_AND_BED
+    assert RESIN_SENSORS <= keys
+    assert {"current_layer", "total_layers", "progress"} <= keys
+    assert not keys & {"chamber_temperature", "fan_model_speed", "position_z", "speed_factor"}
+
+
+async def test_the_vat_sensors_need_their_own_capability() -> None:
+    """A resin printer without a vat heater gets the resin sensors but no vat ones."""
+    hass = make_hass()
+    capabilities = frozenset({Capability.RESIN_STATUS})
+    collector = await collect(hass, build_coordinator(hass, capabilities), sensor_platform)
+    keys = set(collector.keys())
+    assert {"print_phase", "uv_led_temperature", "release_film"} <= keys
+    assert not keys & {"vat_temperature", "vat_target_temperature"}
+
+
+async def test_resin_sensors_read_the_captured_saturn() -> None:
+    """Each resin sensor reads its value from the idle capture."""
+    hass = make_hass()
+    coordinator = build_coordinator(hass, RESIN_CAPABILITIES, resin_snapshot())
+    by_key = (await collect(hass, coordinator, sensor_platform)).by_key()
+    assert by_key["print_phase"].native_value == "idle"
+    assert by_key["print_phase"].options == [item.value for item in ResinPhase]
+    assert by_key["uv_led_temperature"].native_value == 29.077695846557617
+    assert by_key["vat_temperature"].native_value == 29.0
+    assert by_key["vat_target_temperature"].native_value == 30.0
+    assert by_key["release_film"].native_value == 283
+    assert by_key["release_film"].extra_state_attributes == {
+        "max": 60000,
+        "used_percent": 0.5,
+    }
+    assert by_key["filename"].native_value == "SUP_allineatore_01_1_202609301434.goo"
+    assert by_key["uv_led_temperature"].extra_state_attributes is None
+
+
+async def test_resin_sensors_stay_none_without_a_resin_state() -> None:
+    """A snapshot with no resin state, such as an offline one, invents no reading."""
+    hass = make_hass()
+    snapshot = PrinterSnapshot(
+        protocol=ProtocolId.SDCP_CC1, connected=False, capabilities=RESIN_CAPABILITIES
+    )
+    coordinator = build_coordinator(hass, RESIN_CAPABILITIES, snapshot)
+    by_key = (await collect(hass, coordinator, sensor_platform)).by_key()
+    for key in RESIN_SENSORS:
+        assert by_key[key].native_value is None, key
+    assert by_key["release_film"].extra_state_attributes is None
+
+    coordinator.data = PrinterSnapshot(
+        protocol=ProtocolId.SDCP_CC1, connected=True, resin=ResinState()
+    )
+    assert by_key["print_phase"].native_value is None
+    assert by_key["release_film"].extra_state_attributes == {
+        "max": None,
+        "used_percent": None,
+    }
+
+
+async def test_an_fdm_snapshot_document_only_gains_an_empty_resin_key() -> None:
+    """The card and diagnostics see the same FDM document as before, plus ``resin: None``."""
+    document = populated_snapshot().as_dict()
+    assert set(document) == FDM_SNAPSHOT_KEYS | {"resin"}
+    assert document["resin"] is None
+
+
+async def test_a_resin_snapshot_document_is_json_safe() -> None:
+    """The resin state serialises with its phase as text and the film's use in percent."""
+    document = resin_snapshot().as_dict()
+    assert json.loads(json.dumps(document)) == document
+    assert document["resin"] == {
+        "machine": "idle",
+        "phase": "idle",
+        "phase_code": 0,
+        "uv_led": 29.077695846557617,
+        "vat": {"current": 29.0, "target": 30.0},
+        "vat_heat_status": 1,
+        "release_film": 283,
+        "release_film_max": 60000,
+        "release_film_used": 0.5,
+        "printer_timelapse": False,
+        "device_faults": [],
+        "video_streams": 0,
+        "video_streams_max": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("used", "rated", "expected"),
+    [
+        (283, 60000, 0.5),
+        (30000, 60000, 50.0),
+        (283, 0, None),
+        (283, None, None),
+        (None, 60000, None),
+    ],
+)
+async def test_release_film_use_needs_both_counts(
+    used: int | None, rated: int | None, expected: float | None
+) -> None:
+    """The film's use is a share of its rating, and unknown when either count is."""
+    state = ResinState(release_film=used, release_film_max=rated)
+    assert state.release_film_used == expected
+
+
+async def test_every_resin_phase_has_a_state_name() -> None:
+    """The phase sensor names each state, so a dashboard never shows a raw key."""
+    package = (
+        Path(__file__).resolve().parents[1]
+        / "custom_components"
+        / "generic_3dprinter"
+    )
+    strings = json.loads((package / "strings.json").read_text(encoding="utf-8"))
+    states = strings["entity"]["sensor"]["print_phase"]["state"]
+    assert set(states) == {item.value for item in ResinPhase}

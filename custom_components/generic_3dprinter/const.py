@@ -111,6 +111,11 @@ class Capability(StrEnum):
     #: printer with ``SET_CHAMBER_TEMP`` reports one as well, so this is only
     #: declared by a protocol whose chamber is a reading and nothing more.
     CHAMBER_SENSOR = "chamber_sensor"
+    #: A resin printer's own readings: machine and print phase, UV LED and release film.
+    #: It also stands for "no nozzle, no bed", so their sensors are not created.
+    RESIN_STATUS = "resin_status"
+    #: The printer reports a vat temperature and its target, and cannot be told either.
+    VAT_SENSOR = "vat_sensor"
     SET_FAN_SPEED = "set_fan_speed"
     SET_SPEED = "set_speed"
     SET_FLOW = "set_flow"
@@ -171,6 +176,30 @@ class PrintState(StrEnum):
     FINISHED = "finished"
     CANCELLED = "cancelled"
     ERROR = "error"
+
+
+class ResinPhase(StrEnum):
+    """What a resin printer's job or machine is doing, finer than :class:`PrintState`."""
+
+    IDLE = "idle"
+    STARTING = "starting"
+    HOMING = "homing"
+    FILE_CHECKING = "file_checking"
+    PREHEATING = "preheating"
+    DESCENDING = "descending"
+    EXPOSING = "exposing"
+    LIFTING = "lifting"
+    PAUSING = "pausing"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    COMPLETED = "completed"
+    FILE_TRANSFERRING = "file_transferring"
+    FILE_RECEIVED = "file_received"
+    EXPOSURE_TEST = "exposure_test"
+    SELF_CHECK = "self_check"
+    #: A status code this integration has no name for.
+    OTHER = "other"
 
 
 class LightChannel(StrEnum):

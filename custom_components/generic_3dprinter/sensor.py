@@ -34,7 +34,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 
-from .const import Capability, PrintState
+from .const import Capability, PrintState, ResinPhase
 from .coordinator import PrinterCoordinator
 from .entity import (
     FilamentEntityFactories,
@@ -43,7 +43,7 @@ from .entity import (
     async_require_coordinator,
     granted_capabilities,
 )
-from .models import FilamentSlot, FilamentSystem, PrinterSnapshot
+from .models import FilamentSlot, FilamentSystem, PrinterSnapshot, ResinState
 from .runtime import PrinterRuntime
 
 type CapabilityGate = Callable[[Mapping[Capability, bool]], bool]
@@ -63,6 +63,25 @@ def _gate_for(*capabilities: Capability, any_of: bool = False) -> CapabilityGate
     if any_of:
         return lambda granted: any(granted[item] for item in capabilities)
     return lambda granted: all(granted[item] for item in capabilities)
+
+
+def _gate_unless(capability: Capability) -> CapabilityGate:
+    """Return a predicate that holds while ``capability`` is not granted."""
+    return lambda granted: not granted[capability]
+
+
+def _resin(
+    read: Callable[[ResinState], StateType | None],
+) -> Callable[[PrinterSnapshot], StateType | None]:
+    """Return a reader of the resin state, ``None`` while the printer reports none."""
+    return lambda snapshot: read(snapshot.resin) if snapshot.resin is not None else None
+
+
+def _release_film_attributes(snapshot: PrinterSnapshot) -> dict[str, Any] | None:
+    resin = snapshot.resin
+    if resin is None:
+        return None
+    return {"max": resin.release_film_max, "used_percent": resin.release_film_used}
 
 
 def _axis(axis: str) -> Callable[[PrinterSnapshot], StateType | None]:
@@ -88,6 +107,8 @@ class Generic3DPrinterSensorDescription(SensorEntityDescription):
 
     value_fn: Callable[[PrinterSnapshot], StateType | None]
     gate: CapabilityGate = _always
+    #: Extra state attributes read from the same snapshot, if the reading has any.
+    attributes_fn: Callable[[PrinterSnapshot], dict[str, Any] | None] | None = None
 
 
 #: Every sensor this platform can offer.
@@ -97,7 +118,8 @@ class Generic3DPrinterSensorDescription(SensorEntityDescription):
 #: PrusaLink upload files and report no layer count at all, while Moonraker, SDCP
 #: and Duet all report layers. ``FILE_UPLOAD`` is the honest proxy for "this
 #: protocol has a job it tracks layer by layer", and it is deterministic at entry
-#: setup, unlike "the first snapshot happened to be taken mid-print".
+#: setup, unlike "the first snapshot happened to be taken mid-print". A resin
+#: printer reports layers whether or not it can upload, so ``RESIN_STATUS`` counts.
 SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
     Generic3DPrinterSensorDescription(
         key="printer_state",
@@ -110,17 +132,19 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda snapshot: snapshot.progress,
-        gate=_gate_for(Capability.START_PRINT, Capability.PAUSE, any_of=True),
+        gate=_gate_for(
+            Capability.START_PRINT, Capability.PAUSE, Capability.RESIN_STATUS, any_of=True
+        ),
     ),
     Generic3DPrinterSensorDescription(
         key="current_layer",
         value_fn=lambda snapshot: snapshot.current_layer,
-        gate=_gate_for(Capability.FILE_UPLOAD),
+        gate=_gate_for(Capability.FILE_UPLOAD, Capability.RESIN_STATUS, any_of=True),
     ),
     Generic3DPrinterSensorDescription(
         key="total_layers",
         value_fn=lambda snapshot: snapshot.total_layers,
-        gate=_gate_for(Capability.FILE_UPLOAD),
+        gate=_gate_for(Capability.FILE_UPLOAD, Capability.RESIN_STATUS, any_of=True),
     ),
     Generic3DPrinterSensorDescription(
         key="remaining_time",
@@ -146,6 +170,7 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda snapshot: snapshot.hotend.current,
         suggested_display_precision=1,
+        gate=_gate_unless(Capability.RESIN_STATUS),
     ),
     Generic3DPrinterSensorDescription(
         key="nozzle_target_temperature",
@@ -154,6 +179,7 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda snapshot: snapshot.hotend.target,
         suggested_display_precision=1,
+        gate=_gate_unless(Capability.RESIN_STATUS),
     ),
     Generic3DPrinterSensorDescription(
         key="bed_temperature",
@@ -162,6 +188,7 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda snapshot: snapshot.bed.current,
         suggested_display_precision=1,
+        gate=_gate_unless(Capability.RESIN_STATUS),
     ),
     Generic3DPrinterSensorDescription(
         key="bed_target_temperature",
@@ -170,6 +197,7 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda snapshot: snapshot.bed.target,
         suggested_display_precision=1,
+        gate=_gate_unless(Capability.RESIN_STATUS),
     ),
     Generic3DPrinterSensorDescription(
         key="chamber_temperature",
@@ -188,6 +216,47 @@ SENSOR_DESCRIPTIONS: tuple[Generic3DPrinterSensorDescription, ...] = (
         value_fn=lambda snapshot: snapshot.chamber.target,
         suggested_display_precision=1,
         gate=_gate_for(Capability.SET_CHAMBER_TEMP),
+    ),
+    Generic3DPrinterSensorDescription(
+        key="print_phase",
+        device_class=SensorDeviceClass.ENUM,
+        options=[item.value for item in ResinPhase],
+        value_fn=_resin(lambda resin: resin.phase.value if resin.phase is not None else None),
+        gate=_gate_for(Capability.RESIN_STATUS),
+    ),
+    Generic3DPrinterSensorDescription(
+        key="uv_led_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_resin(lambda resin: resin.uv_led),
+        suggested_display_precision=1,
+        gate=_gate_for(Capability.RESIN_STATUS),
+    ),
+    Generic3DPrinterSensorDescription(
+        key="release_film",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=_resin(lambda resin: resin.release_film),
+        attributes_fn=_release_film_attributes,
+        gate=_gate_for(Capability.RESIN_STATUS),
+    ),
+    Generic3DPrinterSensorDescription(
+        key="vat_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_resin(lambda resin: resin.vat.current),
+        suggested_display_precision=1,
+        gate=_gate_for(Capability.VAT_SENSOR),
+    ),
+    Generic3DPrinterSensorDescription(
+        key="vat_target_temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_resin(lambda resin: resin.vat.target),
+        suggested_display_precision=1,
+        gate=_gate_for(Capability.VAT_SENSOR),
     ),
     Generic3DPrinterSensorDescription(
         key="fan_model_speed",
@@ -322,6 +391,14 @@ class Generic3DPrinterSensor(Generic3DPrinterEntity, SensorEntity):
         if self.entity_description.value_fn is _configured_address:
             return self.runtime.config.host
         return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return the reading's own attributes, when its description has any."""
+        attributes_fn = self.entity_description.attributes_fn
+        if attributes_fn is None:
+            return super().extra_state_attributes
+        return attributes_fn(self.coordinator.data)
 
 
 #: The state of a slot with no spool in it.

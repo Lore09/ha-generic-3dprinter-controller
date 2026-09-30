@@ -20,7 +20,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, NewType
 
-from .const import Capability, Command, LightChannel, PrintState, ProtocolId
+from .const import Capability, Command, LightChannel, PrintState, ProtocolId, ResinPhase
 
 #: Branded scalars. At runtime these are floats; the brand is documentation the
 #: type checker enforces, because Bambu and Anycubic report remaining time in
@@ -214,6 +214,59 @@ class FilamentSystem:
 
 
 @dataclass(frozen=True, slots=True)
+class ResinState:
+    """What a resin printer reports beyond a job: phase, UV LED, vat, film and faults.
+    Codes whose meaning is not measured, such as ``HeatStatus``, are kept raw."""
+
+    #: The machine's own status, such as ``idle`` or ``file_transferring``.
+    machine: str | None = None
+    phase: ResinPhase | None = None
+    #: The printer's code for the phase, kept for a code this integration cannot name.
+    phase_code: int | None = None
+    uv_led: Celsius | None = None
+    #: A reading only; this integration never sets the vat's target.
+    vat: Temps = Temps()
+    #: ``HeatStatus`` as sent, its meaning unknown: it read 1 idle at 29 of 30 °C,
+    #: and 0 printing at 20 of 30 °C.
+    vat_heat_status: int | None = None
+    #: Release film lifts so far, and the count the printer rates the film for.
+    release_film: int | None = None
+    release_film_max: int | None = None
+    #: Whether the printer's own timelapse is on.
+    printer_timelapse: bool | None = None
+    #: The device checks that are not reporting OK, by the printer's own name.
+    device_faults: tuple[str, ...] = ()
+    #: Camera streams open now, and how many the printer allows at once.
+    video_streams: int | None = None
+    video_streams_max: int | None = None
+
+    @property
+    def release_film_used(self) -> Percent | None:
+        """Return how much of the film's rated lifts are used, or ``None`` without both."""
+        if self.release_film is None or not self.release_film_max:
+            return None
+        return Percent(round(self.release_film / self.release_film_max * 100, 1))
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe mapping."""
+        return {
+            "machine": self.machine,
+            "phase": self.phase.value if self.phase is not None else None,
+            "phase_code": self.phase_code,
+            "uv_led": self.uv_led,
+            "vat": self.vat.as_dict(),
+            "vat_heat_status": self.vat_heat_status,
+            "release_film": self.release_film,
+            "release_film_max": self.release_film_max,
+            "release_film_used": self.release_film_used,
+            "printer_timelapse": self.printer_timelapse,
+            "device_faults": list(self.device_faults),
+            "video_streams": self.video_streams,
+            "video_streams_max": self.video_streams_max,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PrinterSnapshot:
     """One complete, normalised view of a printer at one instant.
 
@@ -253,6 +306,10 @@ class PrinterSnapshot:
 
     # --- filament
     filament: FilamentSystem | None = None
+
+    # --- resin
+    #: ``None`` for every printer that is not a resin printer.
+    resin: ResinState | None = None
 
     # --- provenance
     model: str | None = None
@@ -316,6 +373,7 @@ class PrinterSnapshot:
             "lights": sorted(item.value for item in self.lights),
             "camera": self.camera,
             "filament": self.filament.as_dict() if self.filament else None,
+            "resin": self.resin.as_dict() if self.resin else None,
             "model": self.model,
             "firmware": self.firmware,
             "serial": self.serial,
