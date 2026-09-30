@@ -36,6 +36,7 @@ from custom_components.generic_3dprinter.mqtt_client import (
 )
 from custom_components.generic_3dprinter.protocols import (
     AuthError,
+    CommandBlockedError,
     CommandRejectedError,
     ConfigError,
     PrinterConfig,
@@ -612,6 +613,26 @@ async def test_start_print_sends_levelling_and_an_empty_tray_map(
                 "config": {"printer_check": True, "slot_map": []},
             }
         ]
+    finally:
+        await adapter.async_teardown()
+
+
+async def test_a_move_is_refused_once_a_print_starts_between_polls(
+    cc2_printer: FakeCC2Printer, session: aiohttp.ClientSession
+) -> None:
+    """The last poll said idle; a print started since must still stop the move."""
+    adapter = make_adapter(cc2_printer, session)
+    try:
+        await adapter.async_setup()
+        await cc2_printer.push_delta({"machine_status": {"status": 1, "sub_status": 0}})
+        await asyncio.sleep(0.05)
+        assert (await adapter.async_read()).print_state is PrintState.IDLE
+        await cc2_printer.push_delta({"machine_status": {"status": 2, "sub_status": 2075}})
+        await asyncio.sleep(0.05)
+        sent = list(cc2_printer.methods)
+        with pytest.raises(CommandBlockedError):
+            await adapter.async_send(Command.JOG, axis="X", distance=10)
+        assert cc2_printer.methods == sent
     finally:
         await adapter.async_teardown()
 

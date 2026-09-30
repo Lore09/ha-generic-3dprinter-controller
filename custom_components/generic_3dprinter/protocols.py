@@ -523,10 +523,10 @@ class Protocol(ABC):
         except ParamError as err:
             raise ProtocolError(str(err)) from err
 
-        # Rules need a state: read once before the first command, and re-read before refusing,
-        # since the last snapshot may be a poll old.
+        # A command a rule covers is judged on a fresh read: the last one may be a poll old,
+        # and a print started since must stop a move, as a print that ended must free one.
         snapshot = self._last_snapshot
-        if snapshot is None or command in snapshot.blocked:
+        if snapshot is None or any(command in rule.commands for rule in self.block_rules):
             snapshot = await self.async_read()
             # A first read can learn which model this is, and narrow what it grants.
             if required not in snapshot.capabilities:
