@@ -103,7 +103,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryError(
             str(err),
             translation_domain=DOMAIN,
-            translation_key="wrong_printer",
+            translation_key=err.translation_key,
             translation_placeholders={"host": config.host, "model": err.model or "an SDCP printer"},
         ) from err
     except ProtocolError as err:

@@ -28,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 #: Every adapter module that ships with the integration.
 ADAPTER_MODULES: Final[tuple[str, ...]] = (
     "sdcp",
+    "sdcp_resin",
     "elegoo_cc2",
     "anycubic_kobra",
     "moonraker",
@@ -162,6 +163,35 @@ KOBRA_MODELS: Final[tuple[ModelProfile, ...]] = (
     ),
 )
 
+#: What every SDCP V3 resin printer reports: its state, phase, UV LED and film, and its files.
+_RESIN_BASE: Final = frozenset({Capability.FILE_LIST, Capability.RESIN_STATUS})
+
+#: Each model by the ``MachineName`` it reports; a model with no vat heater has no vat reading.
+SDCP_RESIN_MODELS: Final[tuple[ModelProfile, ...]] = (
+    ModelProfile(
+        id="Saturn 4 Ultra 16K",
+        name="Elegoo Saturn 4 Ultra 16K",
+        capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
+        verified=True,
+        evidence=(
+            "read on a Saturn 4 Ultra 16K, firmware V1.5.6: commands 0, 1, 258 and 320, "
+            "kept in tests/fixtures/sdcp_saturn4u16k_v156_idle.json"
+        ),
+    ),
+    ModelProfile(
+        id="Saturn 4 Ultra",
+        name="Elegoo Saturn 4 Ultra",
+        capabilities=_RESIN_BASE,
+        evidence="named by danielcherubini/elegoo-homeassistant; not measured by this project",
+    ),
+    ModelProfile(
+        id="Mars 5 Ultra",
+        name="Elegoo Mars 5 Ultra",
+        capabilities=_RESIN_BASE,
+        evidence="named by danielcherubini/elegoo-homeassistant; not measured by this project",
+    ),
+)
+
 #: Menu entries that stand for several protocols, one per printer model. The
 #: config flow shows the family once and then asks which model, so one product
 #: line appears once in the protocol menu however its generations differ on the
@@ -269,6 +299,33 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
             },
             family="elegoo_centauri",
             model="Centauri Carbon",
+        ),
+        ProtocolId.SDCP_RESIN: AdapterRegistration(
+            id=ProtocolId.SDCP_RESIN,
+            label="Elegoo resin (Saturn, Mars) – SDCP",
+            adapter=_resolve(_ADAPTER_MODULES["sdcp_resin"], "SdcpResinProtocol"),  # type: ignore[arg-type]
+            # Read-only: no command is granted until it has been measured on a printer.
+            capabilities=_RESIN_BASE | {Capability.VAT_SENSOR},
+            models=SDCP_RESIN_MODELS,
+            fields=("port", "serial"),
+            ports=(3030,),
+            evidence={
+                "verified": (
+                    "a Saturn 4 Ultra 16K on firmware V1.5.6 answered commands 0, 1, 258 "
+                    "and 320 in the envelope this adapter sends, pushed the attributes and "
+                    "the status only when asked, never answered the text ping, and kept a "
+                    "socket open 200 seconds with or without a command 0 every 20 seconds"
+                ),
+                "inferred": (
+                    "the phase table and the print error codes come from the SDCP V3 spec, "
+                    "and preheating (16) from Elegoo's SDK. Ticks are milliseconds, from the "
+                    "spec and a history entry whose begin and end match its ticks"
+                ),
+                "absent": (
+                    "printing, pausing, stopping, uploading, deleting and the camera, until "
+                    "each is measured on a printer; the vat's target, which no command sets"
+                ),
+            },
         ),
         ProtocolId.ELEGOO_CC2: AdapterRegistration(
             id=ProtocolId.ELEGOO_CC2,

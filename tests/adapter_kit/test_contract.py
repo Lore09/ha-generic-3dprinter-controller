@@ -40,6 +40,8 @@ async def harness_fixture(
                 yield harness
             finally:
                 await harness.adapter.async_teardown()
+            # A fake that records hazards saw none, whatever the case sent.
+            assert harness.hazards is None or harness.hazards() == []
 
 
 def _with_harness(protocols: list[ProtocolId] = PROTOCOLS):
@@ -114,7 +116,7 @@ async def test_a_command_reaches_the_wire_only_when_it_may(
     assert harness.wire() > before, f"{command.value} never reached the printer"
 
 
-@_with_harness([protocol for protocol in PROTOCOLS if protocol in (ProtocolId.SDCP_CC1, ProtocolId.ELEGOO_CC2, ProtocolId.ANYCUBIC_KOBRA)])
+@_with_harness([protocol for protocol in PROTOCOLS if protocol in (ProtocolId.SDCP_CC1, ProtocolId.SDCP_RESIN, ProtocolId.ELEGOO_CC2, ProtocolId.ANYCUBIC_KOBRA)])
 async def test_a_printer_that_went_away_is_reported_and_recovered(harness: AdapterHarness) -> None:
     """A dead printer reads as unreachable, and teardown, setup and read recover it."""
     assert harness.power_off is not None and harness.power_on is not None

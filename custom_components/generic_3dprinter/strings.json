@@ -203,6 +203,12 @@
   "exceptions": {
     "wrong_printer": {
       "message": "{host} answers as {model}, a resin printer, and this entry drives a Centauri Carbon. Remove it and add the printer as an Elegoo resin printer."
+    },
+    "not_a_resin_printer": {
+      "message": "{host} answers as {model}, which is not a resin printer, and this entry drives an Elegoo resin printer. Remove it and add the printer under its own protocol."
+    },
+    "other_resin_printer": {
+      "message": "{host} answers as {model} with another mainboard id than the one this entry was set up for. Remove the entry and add this printer again."
     }
   }
 }

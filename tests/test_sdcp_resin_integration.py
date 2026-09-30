@@ -1,0 +1,205 @@
+"""An Elegoo resin printer inside a real Home Assistant: the config flow and one entry."""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+from homeassistant.config_entries import ConfigEntryState
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.generic_3dprinter.adapters import sdcp_resin
+from custom_components.generic_3dprinter.const import DOMAIN
+from custom_components.generic_3dprinter.registry import protocol_menu
+from tests.fake_printer import MAINBOARD as CC1_MAINBOARD
+from tests.fake_printer import FakePrinterServer
+from tests.fake_resin_printer import FakeResinPrinter, load_fixture
+
+ATTRIBUTES = load_fixture()["attributes"]["Attributes"]
+SATURN = ATTRIBUTES["MainboardID"]
+LABEL = "Elegoo resin (Saturn, Mars) – SDCP"
+
+#: Every entity an idle Saturn 4 Ultra 16K gets, by its unique id's key.
+EXPECTED = frozenset(
+    {
+        "online",
+        "active_job",
+        "printer_state",
+        "progress",
+        "current_layer",
+        "total_layers",
+        "remaining_time",
+        "elapsed_time",
+        "filename",
+        "print_phase",
+        "uv_led_temperature",
+        "release_film",
+        "vat_temperature",
+        "vat_target_temperature",
+        "ip_address",
+        "protocol",
+        "firmware",
+        "model",
+        "serial",
+    }
+)
+
+#: What a resin printer must never be given, as a key or as a word in one.
+NEVER = (
+    "nozzle",
+    "bed",
+    "chamber",
+    "fan",
+    "position",
+    "speed",
+    "flow",
+    "light",
+    "home",
+    "filament",
+    "camera",
+    "timelapse",
+    "pause",
+    "resume",
+    "stop",
+)
+
+
+def _probe(reply: dict[str, Any] | None) -> Any:
+    async def probe(probe: bytes, target: tuple[str, int], timeout: float, accept: Any = None):
+        return None if reply is None else (reply, target[0])
+
+    return probe
+
+
+def test_the_resin_printer_is_in_the_protocol_menu() -> None:
+    assert ("sdcp_resin", LABEL) in protocol_menu()
+
+
+async def _details(hass: HomeAssistant) -> dict[str, Any]:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"discover": False})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"protocol": "sdcp_resin"})
+    assert result["step_id"] == "details"
+    assert result["description_placeholders"]["protocol"] == LABEL
+    fields = {str(key) for key in result["data_schema"].schema}
+    assert {"host", "port", "serial"} <= fields
+    assert "camera_port" not in fields and "web_url" not in fields
+    return result
+
+
+async def test_the_flow_learns_the_mainboard_id(hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sdcp_resin, "async_probe_udp", _probe({"Id": "x", "Data": ATTRIBUTES}))
+    with patch("custom_components.generic_3dprinter.async_setup_entry", return_value=True):
+        result = await _details(hass)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"name": "Saturn", "host": "192.0.2.43"}
+        )
+    assert result["type"] is FlowResultType.CREATE_ENTRY, result
+    assert result["data"]["protocol"] == "sdcp_resin"
+    assert result["data"]["serial"] == SATURN
+    assert result["data"]["port"] == 3030
+    assert result["data"]["unsafe_enabled"] == []
+    assert result["result"].unique_id == f"sdcp_resin:{SATURN}"
+
+
+@pytest.mark.parametrize(
+    ("reply", "detail"),
+    [
+        ({"Id": "x", "Data": {"MachineName": "Centauri Carbon", "MainboardID": CC1_MAINBOARD}}, "not a resin"),
+        ({"Id": "x", "Data": {**ATTRIBUTES, "ProtocolVersion": "V1.0.0"}}, "MQTT"),
+        (None, "did not answer"),
+    ],
+    ids=["fdm", "sdcp-v1", "silent"],
+)
+async def test_the_flow_refuses(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch, reply: dict[str, Any] | None, detail: str
+) -> None:
+    monkeypatch.setattr(sdcp_resin, "async_probe_udp", _probe(reply))
+    result = await _details(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Saturn", "host": "192.0.2.43"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_config"}
+    assert detail in result["description_placeholders"]["detail"]
+
+
+def _entry(hass: HomeAssistant, port: int, serial: str) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Saturn",
+        data={
+            "name": "Saturn",
+            "protocol": "sdcp_resin",
+            "host": "127.0.0.1",
+            "port": port,
+            "serial": serial,
+            "scan_interval": 5,
+        },
+        unique_id=f"sdcp_resin:{serial}",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_a_saturn_entry_has_only_resin_entities(
+    hass: HomeAssistant, hass_ws_client: Any, resin_printer: FakeResinPrinter
+) -> None:
+    entry = _entry(hass, resin_printer.port, SATURN)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    keys = {
+        item.unique_id.removeprefix(f"{entry.entry_id}_")
+        for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+    }
+    assert keys == EXPECTED
+    assert not [key for key in keys for word in NEVER if word in key]
+    assert not [item for item in er.async_entries_for_config_entry(registry, entry.entry_id)
+                if item.domain in ("number", "button", "switch", "camera")]
+
+    phase = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_print_phase")
+    assert hass.states.get(phase).state == "idle"
+    vat = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_vat_temperature")
+    assert float(hass.states.get(vat).state) == 29
+
+    websocket = await hass_ws_client(hass)
+    await websocket.send_json({"id": 1, "type": "generic_3dprinter/describe", "entry_id": entry.entry_id})
+    described = (await websocket.receive_json())["result"]
+    assert described["camera_kind"] is None
+    assert described["model_profile"] == {
+        "id": "Saturn 4 Ultra 16K",
+        "name": "Elegoo Saturn 4 Ultra 16K",
+        "verified": True,
+    }
+    assert described["printer"]["resin"]["machine"] == "idle"
+    assert described["printer"]["progress"] is None
+    assert described["printer"]["filename"] == "SUP_allineatore_01_1_202609301434.goo"
+
+    await websocket.send_json({"id": 2, "type": "generic_3dprinter/send", "entry_id": entry.entry_id,
+                               "command": "set_hotend_temp", "data": {"value": 50}})
+    assert not (await websocket.receive_json())["success"]
+    assert set(resin_printer.sent_commands) <= {0, 1}
+    assert resin_printer.forbidden == []
+    assert resin_printer.texts == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_resin_entry_at_a_centauri_carbon_fails_for_good(hass: HomeAssistant) -> None:
+    printer = FakePrinterServer()
+    await printer.start()
+    try:
+        entry = _entry(hass, int(printer.url.rsplit(":", 1)[1]), CC1_MAINBOARD)
+        assert not await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert entry.state is ConfigEntryState.SETUP_ERROR
+        assert "Centauri Carbon" in (entry.reason or "")
+        assert "not a resin printer" in (entry.reason or "")
+        assert printer.sent_commands == [1]
+    finally:
+        await printer.stop()

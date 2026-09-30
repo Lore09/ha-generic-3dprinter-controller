@@ -54,11 +54,14 @@ class AdapterHarness:
     #: Power the fake off and on again at the same address, or ``None``.
     power_off: Callable[[], Awaitable[None]] | None = None
     power_on: Callable[[], Awaitable[None]] | None = None
+    #: Commands the fake treats as hazards, which must stay empty after every case, or ``None``.
+    hazards: Callable[[], list[Any]] | None = None
 
 
 #: Requests that only read the printer. They are not commands, and a read the
 #: adapter makes on its own must not look like a command reaching the wire.
 SDCP_READS = frozenset({0, 1, 258, 320, 324, 386})
+SDCP_RESIN_READS = frozenset({0, 1, 258, 320})
 CC2_READS = frozenset({1001, 1002, 1042, 1044, 1048, 2005})
 
 HarnessFactory = Callable[[aiohttp.ClientSession, pytest.MonkeyPatch], Any]
@@ -94,6 +97,39 @@ async def sdcp_harness(
         )
     finally:
         await server.stop()
+
+
+@asynccontextmanager
+async def sdcp_resin_harness(
+    session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[AdapterHarness]:
+    """A Saturn 4 Ultra 16K over SDCP, printing, which crashes on any command it must not get."""
+    from tests.fake_resin_printer import FakeResinPrinter
+
+    printer = FakeResinPrinter(printing=True)
+    await printer.start()
+    config = parse_config(
+        {
+            "name": "contract",
+            "protocol": ProtocolId.SDCP_RESIN.value,
+            "host": "127.0.0.1",
+            "port": printer.port,
+            "serial": printer.mainboard,
+        }
+    )
+    try:
+        yield AdapterHarness(
+            protocol=ProtocolId.SDCP_RESIN,
+            config=config,
+            adapter=build_adapter(config, session),
+            wire=lambda: sum(1 for cmd in printer.sent_commands if cmd not in SDCP_RESIN_READS),
+            connections=lambda: printer.connections,
+            power_off=printer.stop,
+            power_on=printer.start,
+            hazards=lambda: printer.forbidden,
+        )
+    finally:
+        await printer.stop()
 
 
 @asynccontextmanager
@@ -226,6 +262,7 @@ async def kobra_harness(
 #: Every protocol's harness. The registry test holds this complete.
 HARNESSES: dict[ProtocolId, HarnessFactory] = {
     ProtocolId.SDCP_CC1: sdcp_harness,
+    ProtocolId.SDCP_RESIN: sdcp_resin_harness,
     ProtocolId.ELEGOO_CC2: cc2_harness,
     ProtocolId.ANYCUBIC_KOBRA: kobra_harness,
     ProtocolId.MOONRAKER: lambda session, _: _http_harness(ProtocolId.MOONRAKER, session),

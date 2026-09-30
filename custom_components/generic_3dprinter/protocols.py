@@ -99,10 +99,13 @@ class AuthError(ProtocolError):
 class WrongPrinterError(ProtocolError):
     """The address answers as a printer this protocol must not drive, such as a resin one."""
 
-    def __init__(self, message: str, *, model: str | None = None) -> None:
-        """Record the model the printer said it is, for the message the user reads."""
+    def __init__(
+        self, message: str, *, model: str | None = None, translation_key: str = "wrong_printer"
+    ) -> None:
+        """Record the model the printer said it is, and which message the user reads."""
         super().__init__(message)
         self.model = model
+        self.translation_key = translation_key
 
 
 class ProtocolShapeError(ProtocolError):

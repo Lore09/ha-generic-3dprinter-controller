@@ -214,6 +214,7 @@ class ProtocolId(StrEnum):
     """Every protocol this integration speaks."""
 
     SDCP_CC1 = "sdcp_cc1"
+    SDCP_RESIN = "sdcp_resin"
     ELEGOO_CC2 = "elegoo_cc2"
     ANYCUBIC_KOBRA = "anycubic_kobra"
     MOONRAKER = "moonraker"
