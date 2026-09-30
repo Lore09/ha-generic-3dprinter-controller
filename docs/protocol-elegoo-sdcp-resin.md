@@ -162,10 +162,12 @@ Things to notice:
   1000`.
 * **There is no `Progress` field**, idle or printing (issue #21 of source 4). Progress
   is `CurrentLayer / TotalLayer`.
-* **An idle printer keeps the last job's layers, ticks and file name**, with `Status`
-  0 and an empty `TaskId`. The spec says the job's own code stays at 9 (completed);
-  V1.5.6 resets it to 0. So progress, times and layers are shown only while a job is
-  in hand, and 100 % once it finished; the file name stays.
+* **An idle printer keeps the last job's layers, ticks and file name**, with an
+  empty `TaskId`. The spec says the job's own code stays at 9 (completed). On V1.5.6
+  the first capture, above, idle after a completed job, showed `Status` 0; after a
+  stop the printer kept 8 (see the job below). So a kept 8 or 9 is read as the end of
+  that job; progress, times and layers are shown only while a job is in hand, and
+  100 % once it finished; the file name stays.
 * `TempTargetTank` is 30 on both 16Ks seen, and no command sets it. The vat is a
   reading and a target the printer keeps, not a heater this integration drives.
 * `HeatStatus` is kept as sent. It was 1 here, idle at 29 of 30 °C, and 0 on the
@@ -191,7 +193,7 @@ source 3):
 | 3 | idle | exposure_test |
 | 4 | idle | self_check |
 | 8 | idle | file_received |
-| [0] | idle, or the kept end of a job (8, 9) | idle |
+| [0] | idle; cancelled or finished when `Status` keeps 8 or 9 | idle; stopped or completed for a kept 8 or 9 |
 
 `PrintInfo.Status` while `CurrentStatus` holds 1 (en.md:181-203; 16 from source 3,
 not seen on a printer):

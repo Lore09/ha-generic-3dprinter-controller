@@ -168,8 +168,11 @@ The Saturn 3 Ultra and the Mars 4 Ultra speak an older SDCP over MQTT, are **not
 supported**, and are refused when you add them.
 
 A resin printer and a Centauri Carbon answer on the same port. An Elegoo Centauri
-Carbon entry that finds a resin printer at its address stops with an error saying so
-before it sends any Centauri command; remove it and add the printer as an Elegoo resin
+Carbon entry that finds a resin printer at its address when it is set up stops with
+an error saying so, before it sends any Centauri command. An entry already running
+when a resin printer takes the address goes offline with that error and keeps
+retrying, and each retry sends only the read-only attribute request (command 1)
+before it stops again. Either way, remove it and add the printer as an Elegoo resin
 printer. A resin entry that finds an FDM printer, or another resin printer than its
 own, stops the same way.
 
@@ -186,9 +189,16 @@ reported to crash the printer's `app` daemon. On that hardware `app` is the whol
 host firmware including the motion stack, so a crash destroys a running print and
 needs a power cycle at the wall.
 
-Everything else the integration sends is a confirmed-working command, and the
-adapter never probes an unknown code. You can enable or disable the opt-in later
-in the integration's **Configure** dialog.
+Everything else the integration sends a Centauri Carbon is a command the printer's
+own page or Elegoo's tools send, and the adapter never probes an unknown code. Only
+the reads (commands 0, 1, 258, 320 and 324) and the camera were checked on a
+printer. Pause, stop, resume and delete (129, 130, 131, 259), the upload, and the
+temperature, fan, speed and light settings (the four variants of 403) come from the
+pycentauri field notes and Elegoo's SDK and were not sent to hardware by this
+project; that command 386 brings the camera back after a power cycle was reported by
+a user. The Centauri Carbon this was developed on has since been sold, so none of
+this can be checked on it again. You can enable or disable the opt-in later in the
+integration's **Configure** dialog.
 
 The Centauri Carbon 2 has the same opt-in, for a different reason: starting a print
 heats and moves a machine nobody is watching. Its firmware also remembers the last
@@ -419,15 +429,17 @@ slot" means the slicer, the phone app and other clients hold them all.
 
 **A Centauri Carbon stops answering after a power cycle until its web page is
 opened.** Fixed in 0.5.0. Measured on the printer: it closes a client that does not
-send the text `ping` its own page sends every 30 seconds, it pushes its status only
-when asked, and after a power cycle its camera stays off until something switches it
-on. The integration now does what the page does: it pings, it asks for the status on
-every connection and whenever the last one is more than 20 seconds old, and it
-switches the camera on with command 386 before reading it.
+send the text `ping` its own page sends every 30 seconds, and it pushes its status
+only when asked. A user reported that after a power cycle its camera stays off until
+something switches it on. The integration now does what the page does: it pings, it
+asks for the status on every connection and whenever the last one is more than 20
+seconds old, and it switches the camera on with command 386 before reading it.
 
 **A Centauri Carbon entry stops with "answers as ..., a resin printer".** A resin
-printer now answers at that address. The entry stops rather than drive it; remove it
-and add the printer as an Elegoo resin printer.
+printer now answers at that address. The entry stops rather than drive it: at setup
+it fails with that error, and an entry already running goes offline and keeps
+retrying, sending only the read-only attribute request (command 1) each time.
+Remove it and add the printer as an Elegoo resin printer.
 
 **A resin printer's camera will not open.** It opens only while the printer reports
 both of its two video places free. Close Elegoo's slicer and app. If the printer
@@ -447,7 +459,12 @@ component. Entity names come from there, not from `strings.json`.
   carries an `evidence` mapping that says what is verified and what is inferred,
   and the integration's diagnostics report it.
 * The Elegoo SDCP adapter was developed against a live Centauri Carbon on firmware
-  `V1.4.49` and verified end to end.
+  `V1.4.49`. The reads (commands 0, 1, 258, 320 and 324), the camera and the
+  keep-alive were checked on it. Starting a print, pause, stop, resume and delete
+  (128 to 131, 259), the four settings variants of 403 and the upload come from the
+  pycentauri field notes and Elegoo's SDK and were not sent to it, and what command
+  386 does after a power cycle was reported by a user. That printer has since been
+  sold, so none of this can be checked on it again.
 * The Elegoo **Centauri Carbon 2** adapter was checked against a live printer on
   firmware `02.01.00.00`: status, temperatures, fans, the light, homing, jogging,
   the file list, an upload and the camera all answered as expected. Pause, resume,

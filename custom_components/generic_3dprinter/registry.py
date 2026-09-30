@@ -467,7 +467,7 @@ def _all_registrations() -> dict[ProtocolId, AdapterRegistration]:
                 ),
                 "absent": (
                     "upload, because no source records the body its endpoint takes; "
-                    "deleting a file, until the file list is confirmed on a printer; "
+                    "deleting a file, since deleteLocal has not been sent to a printer; "
                     "loading and unloading filament, which the LAN protocol has no "
                     "command for; drying, humidity and remaining filament, which the "
                     "shared model has no field for"

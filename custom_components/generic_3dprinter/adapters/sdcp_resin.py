@@ -99,7 +99,8 @@ JOB_PHASES: Final[Mapping[int, tuple[PrintState, ResinPhase]]] = MappingProxyTyp
         16: (PrintState.PREPARING, ResinPhase.PREHEATING),
     }
 )
-#: The spec says an idle machine keeps the code of the job that ended; V1.5.6 resets it to 0.
+#: The codes an idle machine keeps from the job that ended, per the spec. V1.5.6 showed 0
+#: idle after a completed job, and kept 8 after a stop.
 RETAINED_JOB_STATUS: Final = frozenset({8, 9})
 
 #: The states in which the job's progress, times and layers mean the job in hand.

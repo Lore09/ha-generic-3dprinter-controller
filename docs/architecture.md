@@ -41,9 +41,10 @@ printer's own page through Home Assistant and renders it inside the card, so a
 dashboard on HTTPS can show a printer that only speaks HTTP on the LAN.
 
 The second case is a real adapter with an empty command set and a `WEB_UI`
-capability, not a special case threaded through the coordinator. The only thing
-the coordinator does differently is skip polling, which is a property of the
-snapshot (`snapshot_available = False`), not a type check.
+capability, not a special case threaded through the coordinator. The coordinator
+polls it like any other printer; each read asks for the page and reports only
+whether the host answered, with the print state unknown and every other reading
+empty.
 
 ## Normalised state
 
@@ -57,10 +58,11 @@ Consequences that follow, and that the card must respect:
 
 * `current_layer` and `total_layers` are optional. A card that assumes them is
   broken on half the fleet.
-* Remaining time is normalised to **seconds** at the adapter boundary. Bambu
-  reports minutes and Anycubic reports minutes, so the conversion happens in
-  those adapters and never leaks upward.
-* Fan speeds are normalised to **0 to 100 percent**. Bambu reports 0 to 15.
+* Remaining time is normalised to **seconds** at the adapter boundary. Anycubic
+  reports minutes and an Elegoo resin printer milliseconds, so the conversion
+  happens in those adapters and never leaks upward.
+* Fan speeds are normalised to **0 to 100 percent**. Moonraker and Duet report a
+  fraction of one and the Centauri Carbon 2 a duty of 0 to 255.
 * Print state is a closed enum, because every protocol has a different string for
   "paused" and the card must not learn eight vocabularies.
 * A resin printer keeps that enum. What it adds, such as the phase of a layer
@@ -198,8 +200,8 @@ never share mutable state and never need serialising against each other.
 ## What this deliberately does not do
 
 * No cloud. Every adapter is LAN-only. A printer that needs an account to work is
-  out of scope, and Bambu's firmware-side developer-mode gate is reported as a
-  state rather than retried.
+  out of scope, and a Centauri Carbon 2 in cloud mode is refused at setup with a
+  message saying so rather than retried.
 * No protocol is claimed to work that was not probed. The Centauri Carbon was
   probed live, and a Saturn 4 Ultra 16K was read live. Moonraker, OctoPrint and
   Duet are built from the documented and cited API surface, and their adapters say

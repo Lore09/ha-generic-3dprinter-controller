@@ -45,9 +45,12 @@
   attribute for automations; and a refused command never reaches the printer. Every
   printer refuses to move, start a print or change filament during a job, which the
   card used to enforce on its own.
-* **Discovery finds every printer that answers.** When several do, the setup asks
-  which one to add, and printers already set up are not offered again. A printer
-  that reports a serial number is keyed by it, so a new address does not add it twice.
+* **Discovery asks every protocol at once.** A search offers one printer of each
+  kind that answers: the first Centauri Carbon, the first Elegoo resin printer and
+  the first Centauri Carbon 2. When several kinds answer, the setup asks which one
+  to add; another printer of the same kind is added by its address. Printers
+  already set up are not offered again. A printer that reports a serial number is
+  keyed by it, so a new address does not add it twice.
 * **Printers whose camera is a video stream** are played by Home Assistant, and the
   card shows them with Home Assistant's own camera card. No printer uses this yet.
 * One protocol can now serve several printer models, each with the controls it

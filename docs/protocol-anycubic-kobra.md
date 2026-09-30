@@ -111,8 +111,8 @@ streamed on with the light switched off.
 * **Upload.** The `info` report names an upload URL,
   `http://<host>:18910/gcode_upload?s=<token>`, but no source records the request
   body it takes. See the capture recipe below.
-* **Deleting a file.** `file` / `deleteLocal` is documented (3) and held back until
-  the file list is confirmed on a printer.
+* **Deleting a file.** `file` / `deleteLocal` is documented (3) but has not been
+  sent to a printer; the paged file list is measured, the delete is not.
 * **Loading and unloading filament.** The LAN protocol has no command for it.
 * **Drying, humidity and remaining filament.** The shared model has no field for
   them yet.
