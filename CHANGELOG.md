@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
 **Added**
 
@@ -9,7 +9,8 @@
   of each layer, layers, progress and time left, the UV LED, the vat and the target
   the printer keeps, the release film's lifts against its rating, failing device
   checks and print errors, and its files; pause, resume, stop, delete, and upload of
-  the `.ctb` and `.goo` files the printer names. Starting a print and the camera are
+  the `.ctb` and `.goo` files the printer names (a name already on the printer is
+  refused, since the printer's list cannot tell two files of one name apart). Starting a print and the camera are
   each an opt-in: the camera opens only while both of the printer's two RTSP
   sessions are free and is closed gracefully, since a session a killed client
   leaves behind needs a power cycle. No nozzle, bed, fan, light or motion control
@@ -27,16 +28,18 @@
   records a frame per layer, or every 30 seconds without layers, and turns them into
   an MP4 in the media folder when the job ends, with a `generic_3dprinter_timelapse`
   event pointing at it. A Timelapse light switch lights a job that starts in the
-  dark and switches the light off again after. A still from a stream camera now reuses the running stream
-  instead of restarting the printer's capture, which cut off whoever was watching.
+  dark and switches the light off again after. A still from a stream camera reuses
+  the running stream instead of restarting the printer's capture, which would cut off
+  whoever was watching, and Home Assistant's ffmpeg, which those stills need, is set
+  up for such a printer even where no other integration loads it.
 * **The Anycubic Kobra 3, Kobra 4, Kobra S1 and Kobra X**, in LAN mode, added with
   their address alone. Status, temperatures, fans, speed, the light, pause, resume
   and stop; home and jog on the Kobra X; the Kobra X's built-in four-colour changer
   and any ACE as a multi-material unit with auto-feed; the camera as a stream; the
   file list; and starting a print as an opt-in. On the Kobra 3, 4 and S1,
   temperatures, fans and speed apply only during a print, and the card says so.
-  The Kobra X is checked on a printer, firmware 2.0.1.9, except printing, speed and
-  auto-feed. The other models are built from other projects' published work and
+  The Kobra X is checked on a printer, firmware 2.0.1.9, except printing, speed,
+  auto-feed, homing Z or all axes and jogging Y or Z. The other models are built from other projects' published work and
   marked unverified; `tools/acceptance_kobra.py` checks one.
 * **Controls say why they are refused.** A printer now reports the commands it
   supports but will not take right now, with the reason, such as a Centauri Carbon
@@ -51,11 +54,15 @@
   to add; another printer of the same kind is added by its address. Printers
   already set up are not offered again. A printer that reports a serial number is
   keyed by it, so a new address does not add it twice.
-* **Printers whose camera is a video stream** are played by Home Assistant, and the
-  card shows them with Home Assistant's own camera card. No printer uses this yet.
+* **Printers whose camera is a video stream**, such as the Kobra's, are played by
+  Home Assistant, and the card shows them with Home Assistant's own camera card.
 * One protocol can now serve several printer models, each with the controls it
-  really has, and the card marks a model nobody has measured as unverified.
+  really has, and the card marks a model nobody has measured as unverified. A model
+  the integration does not know gets only the controls every known model has.
 * MQTT over TLS, for printers whose broker needs it.
+* **The integration has its own icon**, which Home Assistant shows in its settings on
+  releases that read a custom integration's own brand images (2026.9 does, 2026.2
+  does not).
 
 **Fixed**
 
@@ -89,7 +96,8 @@
 
 **Development**
 
-* `requirements-test.txt` pins the test harness. The card tests need Node 22.12.
+* `requirements-test.txt` pins the test harness and ffmpeg's library. The card tests
+  need Node 22.12.
 * Every adapter runs one shared contract suite against its fake printer.
 * A fake Saturn built only from frames the real one sent, which records any command
   a resin printer must never get.
