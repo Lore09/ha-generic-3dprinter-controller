@@ -16,7 +16,7 @@
  * soon as the integration is installed.
  */
 
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.1";
 
 const WS_LIST = "generic_3dprinter/list";
 const WS_DESCRIBE = "generic_3dprinter/describe";

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.1
+
+**Fixed**
+
+* **A printer's options would not open: "Config flow could not be loaded: 500
+  Internal Server Error".** The port field allowed an empty value in a way Home
+  Assistant cannot turn into a form, so every printer's options failed, on every
+  protocol. That also left no way to allow a hazard after setup, such as the
+  camera of an Elegoo resin printer, whose camera entity does not appear until it
+  is allowed. Reproduced with the form code of a real Home Assistant 2026.9.4: every
+  options form failed before, and none fails now. Clearing the port in the options
+  now goes back to the protocol's default.
+* **A hazard allowed or refused in the options was not kept.** The list of allowed
+  hazards was dropped together with the form's boxes, so the choice made at setup
+  stayed. It is now saved.
+* **The setup form of the Centauri Carbon, the Centauri Carbon 2 and OctoPrint failed
+  the same way on Home Assistant before 2026.9**, through its camera port field.
+
+A test now converts every setup and options form of every protocol the way Home
+Assistant does before it sends one to the browser.
+
 ## 0.6.0
 
 **Added**
