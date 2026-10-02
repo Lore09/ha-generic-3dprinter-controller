@@ -373,9 +373,14 @@ class Generic3DPrinterConfigFlow(ConfigFlow, domain=DOMAIN):
         if CONF_WEB_URL in registration.fields:
             fields[vol.Optional(CONF_WEB_URL, default=self._data.get(CONF_WEB_URL, ""))] = str
         if CONF_CAMERA_PORT in registration.fields:
+            # A field left blank is not sent; ``vol.Any("", ...)`` would not serialize, and the form
+            # would open as a 500.
             fields[
-                vol.Optional(CONF_CAMERA_PORT, default=self._data.get(CONF_CAMERA_PORT, ""))
-            ] = vol.Any("", vol.Coerce(int))
+                vol.Optional(
+                    CONF_CAMERA_PORT,
+                    description={"suggested_value": self._data.get(CONF_CAMERA_PORT) or None},
+                )
+            ] = vol.Coerce(int)
         if CONF_TLS in registration.fields:
             fields[
                 vol.Optional(CONF_TLS, default=self._data.get(CONF_TLS, False))
@@ -443,8 +448,14 @@ class Generic3DPrinterOptionsFlow(OptionsFlow):
                 for key, value in user_input.items()
                 if key.startswith("unsafe_") and value
             ]
-            merged = {**current, **user_input, CONF_UNSAFE_ENABLED: unsafe}
-            merged = {key: value for key, value in merged.items() if not key.startswith("unsafe_")}
+            # A port cleared in the form is not sent at all, and means the protocol's default.
+            # The boxes go, and the list they make is added after: its key starts with "unsafe_" too.
+            merged = {
+                key: value
+                for key, value in {**current, CONF_PORT: None, **user_input}.items()
+                if not key.startswith("unsafe_")
+            }
+            merged[CONF_UNSAFE_ENABLED] = unsafe
             try:
                 parse_config(merged)
             except ConfigError as err:
@@ -456,9 +467,10 @@ class Generic3DPrinterOptionsFlow(OptionsFlow):
         schema: dict[Any, Any] = {
             vol.Required(CONF_NAME, default=current.get(CONF_NAME, "")): str,
             vol.Required(CONF_HOST, default=current.get(CONF_HOST, "")): str,
-            vol.Optional(CONF_PORT, default=current.get(CONF_PORT)): vol.Any(
-                None, "", vol.Coerce(int)
-            ),
+            # ``vol.Any(None, "", ...)`` would not serialize, and the form would open as a 500.
+            vol.Optional(
+                CONF_PORT, description={"suggested_value": current.get(CONF_PORT) or None}
+            ): vol.Coerce(int),
             vol.Optional(
                 CONF_SCAN_INTERVAL, default=current.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
             ): selector.NumberSelector(
